@@ -1,0 +1,4 @@
+(executable
+ (public_name rinha)
+ (name main)
+ (libraries rinha))
