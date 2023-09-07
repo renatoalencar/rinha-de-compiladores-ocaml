@@ -20,6 +20,7 @@
 - Acesso a tuplas aninhadas serem traduzidas para acesso a um array. Pode depender do tipo retornado.
   Exemplo: second(second((1, (2, (3, 4))))) -> &[1, 2, 3, 4][2]
   Exemplo: first(second(second((1, (2, (3, 4)))))) -> [1, 2, 3, 4][2]
+- Existem outras paradigmas de execucao que podem aproveitar melhor paralelizacao?
 
 ## Garbage collection
 
