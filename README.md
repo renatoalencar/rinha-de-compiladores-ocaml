@@ -5,6 +5,7 @@
 - Reproduzir a sintaxe de definida em https://github.com/aripiprazole/rinha-de-compiler/blob/main/SPECS.md
 - Fazer type inference onde for possível, com objetivo de performance.
 - Tem poucos tipos, o que deve tornar a implementacao mais facil.
+  - Hindley-Milner sem ADTs =).
 - Ter um frontend JSON e um da propria linguagem com Menhir.
 - Fazer inlining quando possível, provavelmente vou ter que ter algum passo de otimizacoes especificas. Ideias de otimizacao abaixo.
 - Backend WebAssembly, flambda, LLVM e x86.

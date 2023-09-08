@@ -1,2 +1,4 @@
 (library
- (name rinha))
+ (name rinha)
+ (flags (:standard -w -30))
+ (preprocess (pps ppx_deriving.show)))
