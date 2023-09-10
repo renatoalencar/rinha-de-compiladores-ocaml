@@ -232,10 +232,6 @@ let rec of_parsed_tree ~env tree =
   | E_Error { message; loc; _ } -> report_error ~loc message
 
 and unify t1 t2 =
-  Format.printf
-    "%a %a\n"
-    pp_typ t1
-    pp_typ t2;
   match t1, t2 with
   | (Bool, Bool) | (Str, Str) | (Int, Int) -> ()
   | (Var v1, Var v2) when !v1 <> !v2 ->

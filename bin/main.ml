@@ -1,58 +1,25 @@
 open Rinha
-open Parsetree
 
-let dummy_loc = { start = 0; _end = 0; filename = "<stdin>" }
+let main () =
+  let input_filename = Sys.argv.(1) in
 
-let fib =
-  E_Let
-    ("fib"
-    , E_Function
-        { parameters = [ ("n", dummy_loc) ]
-        ; body = E_If
-            { predicate = E_Binary { lhs = E_Var ("n", dummy_loc)
-                                   ; op = Lt
-                                   ; rhs = E_Int (2L, dummy_loc)
-                                   ; loc = dummy_loc}
-            ; consequent = E_Var ("n", dummy_loc)
-            ; alternative =
-                E_Binary
-                  { lhs =
-                      E_Call
-                        { callee = E_Var ("fib", dummy_loc)
-                        ; arguments =
-                            [ E_Binary { lhs = E_Var ("n", dummy_loc)
-                                       ; op = Sub
-                                       ; rhs = E_Int (1L, dummy_loc)
-                                       ; loc = dummy_loc} ]
-                        ; loc = dummy_loc }
-                  ; op = Add
-                  ; rhs =
-                      E_Call
-                        { callee = E_Var ("fib", dummy_loc)
-                        ; arguments =
-                            [ E_Binary { lhs = E_Var ("n", dummy_loc)
-                                      ; op = Sub
-                                      ; rhs = E_Int (2L, dummy_loc)
-                                      ; loc = dummy_loc} ]
-                        ; loc = dummy_loc }
-                  ; loc = dummy_loc }
-            ; loc = dummy_loc }
-        ; loc = dummy_loc }
-    , E_Print
-        (E_Call
-          { callee = E_Var ("fib", dummy_loc)
-          ; arguments = [ E_Int (10L, dummy_loc) ]
-          ; loc = dummy_loc}
-        , dummy_loc)
-    , dummy_loc)
+  let parsetree =
+    let in_channel = open_in input_filename in
+    let parsetree = Json.of_channel in_channel in
+    close_in in_channel;
+    parsetree
+  in
 
-let tree = Typedtree.of_parsed_tree fib
+  let typedtree = Typedtree.of_parsed_tree parsetree in
 
-let () = Format.printf "%a\n" Typedtree.pp_typed_tree tree
+  let output_filename = Filename.temp_file "rinha" ".ll" in
+  let output = open_out output_filename in
+  Codegen.compile_main output typedtree;
+  close_out output;
 
-let _ = print_endline "SUCESS"
+  ignore @@
+    Sys.command
+      (String.concat " "
+        [ "clang -o"; Sys.argv.(2); "runtime.o"; output_filename ])
 
-let _ =
-  Hashtbl.iter
-    (fun key value -> Format.printf "%d -> %a\n" key Typedtree.pp_typ value)
-    Typedtree.type_env
+let () = main ()
