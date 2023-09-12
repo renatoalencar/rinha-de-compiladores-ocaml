@@ -13,6 +13,8 @@ let operation_of_yojson = function
   | `String "Add" -> Add
   | `String "Sub" -> Sub
   | `String "Lt" -> Lt
+  | `String "Eq" -> Eq
+  | `String "Or" -> Or
   | _ -> assert false
 
 let var_of_yojson yojson =
@@ -93,7 +95,13 @@ let rec parse_expression expr =
     let value = parse_int @@ List.assoc "value" expr in
     let loc = loc_of_yojson @@ List.assoc "location" expr in
     E_Int (Int64.of_int value, loc)
-  | _ -> assert false
+  | `String "Str" ->
+    let value = parse_string @@ List.assoc "value" expr in
+    let loc = loc_of_yojson @@ List.assoc "location" expr in
+    E_Str (value, loc)
+  | t -> Format.eprintf "Unsupported: %s\n"
+    @@ Yojson.Safe.to_string t;
+    exit 1
 
 let of_yojson yojson =
   match yojson with

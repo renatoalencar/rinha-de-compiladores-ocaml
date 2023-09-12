@@ -1,29 +1,51 @@
 
 type typ =
   | I1
+  | I8
   | I32
   | I64
   | Void
+  | Ptr
+  | Array of int * typ
+[@@deriving show]
+
+type value =
+  | Ptr of typ * value
+  | Label of typ * string
+  | Reg of typ * string
+  | Int32 of int32
+  | Int1 of int
+[@@deriving show]
 
 type cmp =
+  | Sle
   | Slt
-
-type register = string
+  | Eq
+  | Ne
+  | Sge
+  | Sgt
 
 type instr =
-  | I_icmp of cmp * typ * register * register
-  | I_add of typ * register * register
-  | I_sub of typ * register * register
-  | I_call of typ * string * (typ * register) list
-  | I_phi of typ * ( register * string ) * ( register * string )
+  | I_icmp of cmp * typ * value * value
+  | I_add of typ * value * value
+  | I_sub of typ * value * value
+  | I_mul of typ * value * value
+  | I_sdiv of typ * value * value
+  | I_srem of typ * value * value
+  | I_or of typ * value * value
+  | I_and of typ * value * value
+  | I_call of typ * string * value list
+  | I_phi of typ * ( value * string ) * ( value * string )
+  | I_bitcast of value * typ
 
 type function_toplevel =
-  | Assign of register * instr
+  | Assign of string * instr
   | Label of string
-  | Call of typ * string * (typ * register) list
-  | Br of register * string * string
+  | Call of typ * string * value list
+  | Br of value * string * string
   | Br_Label of string
-  | Ret of typ * register
+  | Ret of value
+  | Store of typ * value * value * value
 
 type func =
   { name : string
@@ -48,45 +70,101 @@ let create_label func prefix =
 let push_instruction func instr =
   Queue.push instr func.body
 
-let type_to_string = function
+let push_instructions func instrs =
+  List.iter (push_instruction func) instrs
+
+let rec type_to_string = function
   | I1 -> "i1"
+  | I8 -> "i8"
   | I32 -> "i32"
   | I64 -> "i64"
   | Void -> "void"
+  | Ptr -> "ptr"
+  | Array (size, typ) ->
+    Printf.sprintf "[%d x %s]*" size (type_to_string typ)
 
 let cmp_to_string = function
+  | Sle -> "sle"
   | Slt -> "slt"
+  | Eq -> "eq"
+  | Ne -> "ne"
+  | Sge -> "sge"
+  | Sgt -> "sgt"
+
+let value_to_string ?(ignore_type = false) typ =
+  let typ, str =
+  match typ with
+    | Reg (typ, reg) -> typ, reg
+    | Int32 int32 -> I32, Int32.to_string int32
+    | Label (typ, label) -> typ, "@" ^ label
+    | value -> Format.eprintf "ERROR %a\n" pp_value value; exit 1
+  in
+  if ignore_type then str
+  else type_to_string typ ^ " " ^ str
+
+let find_llvm_type = function
+  | Reg (typ, _) -> typ
+  | Int32 _ -> I32
+  | Label (typ, _) -> typ
+  | _ -> assert false
+
+let force_ptr = function
+  | Reg (_, reg) -> Reg (Ptr, reg)
+  | Label (_, name) -> Label (Ptr, name)
+  | _ -> assert false
 
 let write_call fmt typ name arguments =
   Format.fprintf fmt "call %s @%s(%s)"
     (type_to_string typ)
     name
     (String.concat ", "
-      @@ List.map (fun (typ, reg) -> Format.sprintf "%s %s" (type_to_string typ) reg)
-        arguments)
+      @@ List.map value_to_string arguments)
 
 let write_instr fmt = function
   | I_icmp (cmp, typ, x, y) ->
     Format.fprintf fmt "icmp %s %s %s, %s"
       (cmp_to_string cmp)
       (type_to_string typ)
-      x y
+      (value_to_string ~ignore_type:true x) (value_to_string ~ignore_type:true y)
   | I_add (typ, x, y) ->
     Format.fprintf fmt "add %s %s, %s"
       (type_to_string typ)
-      x y
+      (value_to_string ~ignore_type:true x) (value_to_string ~ignore_type:true y)
   | I_sub (typ, x, y) ->
     Format.fprintf fmt "sub %s %s, %s"
       (type_to_string typ)
-      x y
+      (value_to_string ~ignore_type:true x) (value_to_string ~ignore_type:true y)
+  | I_mul (typ, x, y) ->
+    Format.fprintf fmt "mul %s %s, %s"
+      (type_to_string typ)
+      (value_to_string ~ignore_type:true x) (value_to_string ~ignore_type:true y)
+  | I_sdiv (typ, x, y) ->
+    Format.fprintf fmt "sdiv %s %s, %s"
+      (type_to_string typ)
+      (value_to_string ~ignore_type:true x) (value_to_string ~ignore_type:true y)
+  | I_srem (typ, x, y) ->
+    Format.fprintf fmt "srem %s %s, %s"
+      (type_to_string typ)
+      (value_to_string ~ignore_type:true x) (value_to_string ~ignore_type:true y)
+  | I_or (typ, x, y) ->
+    Format.fprintf fmt "or %s %s, %s"
+      (type_to_string typ)
+      (value_to_string ~ignore_type:true x) (value_to_string ~ignore_type:true y)
+  | I_and (typ, x, y) ->
+    Format.fprintf fmt "and %s %s, %s"
+      (type_to_string typ)
+      (value_to_string ~ignore_type:true x) (value_to_string ~ignore_type:true y)
   | I_call (typ, name, arguments) ->
     write_call fmt typ name arguments
   | I_phi (typ, (r1, l1), (r2, l2)) ->
     Format.fprintf fmt "phi %s [ %s, %%%s ], [ %s, %%%s ]"
       (type_to_string typ)
-      r1 l1
-      r2 l2
-
+      (value_to_string ~ignore_type:true r1) l1
+      (value_to_string ~ignore_type:true r2) l2
+  | I_bitcast (value, typ) ->
+    Format.fprintf fmt "bitcast %s to %s"
+      (value_to_string value)
+      (type_to_string typ)
 
 let write_toplevel fmt = function
   | Assign (dest_reg, instr) -> Format.fprintf fmt "\t%s = %a\n" dest_reg write_instr instr
@@ -96,12 +174,16 @@ let write_toplevel fmt = function
     write_call fmt typ name arguments;
     Format.pp_print_char fmt '\n'
   | Br (cmp, if_true, if_false) ->
-    Format.fprintf fmt "\tbr i1 %s, label %%%s, label %%%s\n"
-      cmp if_true if_false
+    Format.fprintf fmt "\tbr %s, label %%%s, label %%%s\n"
+      (value_to_string cmp) if_true if_false
   | Br_Label name ->
     Format.fprintf fmt "\tbr label %%%s\n" name
-  | Ret (typ, value) ->
-    Format.fprintf fmt "\tret %s %s\n" (type_to_string typ) value
+  | Ret value ->
+    Format.fprintf fmt "\tret %s\n" (value_to_string value)
+  | Store (typ, value, ptr, index) ->
+    Format.fprintf fmt "\tstore %s %s, ptr %s, alignment %s\n"
+      (type_to_string typ)
+      (value_to_string value) (value_to_string ptr) (value_to_string index)
 
 let write_to_file output { name; return_type; body; arguments; _ } =
   let fmt = Format.formatter_of_out_channel output in
@@ -121,4 +203,10 @@ let write_declare output name return_type arguments =
     (type_to_string return_type)
     name
     (String.concat ", " @@ List.map type_to_string arguments);
+  Format.pp_print_flush fmt ()
+
+let write_string output label str =
+  let fmt = Format.formatter_of_out_channel output in
+  Format.fprintf fmt "@%s = private constant [%d x i8] c\"%s\\00\"\n"
+    label (String.length str + 1) str;
   Format.pp_print_flush fmt ()

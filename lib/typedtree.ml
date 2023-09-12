@@ -248,7 +248,13 @@ and unify t1 t2 =
     unify t1 t1';
     unify t2 t2'
   | (Arrow (a1, r1), Arrow (a2, r2)) ->
-    List.iter2 unify a1 a2;
+    (try
+      List.iter2 unify a1 a2
+    with Invalid_argument _ ->
+      Printf.eprintf "%d arguments expected, %d found."
+        (List.length a1)
+        (List.length a2);
+      exit 1);
     unify r1 r2
 
   | t1, t2 ->

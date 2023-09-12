@@ -1,18 +1,21 @@
+#include <alloca.h>
 #include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
 
-void int_to_string(int64_t value, char* buffer) {
-  int i = 0;
-  while (value != 0) {
-    char digit = value % 10 + '0';
-    buffer[i] = digit;
-    value = value / 10;
-    i++;
-  }
-  buffer[i] = '\0';
+char* int_to_string(int32_t value) {
+  char* buffer = malloc(1024);
+  sprintf(buffer, "%d", value);
+  return buffer;
 }
 
-void print(int64_t value) {
-  char buffer[1024];
-  int_to_string(value, buffer);
+char* rinha_strcat(char* s1, char* s2) {
+  char* result = malloc(strlen(s1) + strlen(s2));
+  strcpy(result, s1);
+  strcat(result, s2);
+  return result;
+}
+
+void print(char* buffer) {
   puts(buffer);
 }
