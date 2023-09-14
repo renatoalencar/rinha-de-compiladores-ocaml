@@ -15,6 +15,7 @@
 
 (documentation https://url/to/documentation)
 
+;; TODO: Move to flambda
 (package
  (name rinha)
  (synopsis "A short synopsis")

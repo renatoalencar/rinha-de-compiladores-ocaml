@@ -2,3 +2,7 @@
  (public_name rinha)
  (name main)
  (libraries rinha))
+
+(env
+ (release
+  (ocamlopt_flags (:standard -O3))))
