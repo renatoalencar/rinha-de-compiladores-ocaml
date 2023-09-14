@@ -83,9 +83,78 @@ let compile_string_concatenation func lhs lhs_type rhs rhs_type =
   push_instructions func instr;
   Reg (Ptr, reg)
 
+module StringSet = Set.Make(String)
+
+(* TODO: Still not working!
+   It should rely on environment only for non global functions,
+   we should differentiate for that. *)
+let find_free_variables env parameters body =
+  let rec aux vars defined expr =
+  match expr with
+  | T_Int _ | T_Str _ | T_Bool _ -> vars
+
+  | T_Let (name, value, next, _, _) ->
+    let vars = aux vars defined value in
+    aux vars (StringSet.add name defined) next
+
+  | T_Var (name, _, _) ->
+    if StringSet.mem name defined || Env.mem name env then
+      vars
+    else
+      (StringSet.add name vars)
+
+  | T_Call { callee; arguments; _ } ->
+    let vars = aux vars defined callee in
+    List.fold_left
+      (fun vars arg -> aux vars defined arg)
+      vars
+      arguments
+
+  | T_Binary { lhs; rhs; _ } ->
+    StringSet.union
+      (aux vars defined lhs)
+      (aux vars defined rhs)
+
+  | T_Function _ ->
+    prerr_endline "Warning: TODO find free variables in nested closures.";
+    vars
+
+  | T_If { predicate; consequent; alternative; _ } ->
+    StringSet.(union
+      (aux vars defined predicate)
+      (union (aux vars defined consequent) (aux vars defined alternative)))
+
+  | T_Tuple (first, second, _, _) ->
+    StringSet.union (aux vars defined first) (aux vars defined second)
+
+  | T_Print (value, _)
+  | T_First (value, _, _)
+  | T_Second (value, _, _) -> aux vars defined value
+  in
+  let parameters = List.fold_left
+    (fun env (parameter, _) -> StringSet.add parameter env)
+    StringSet.empty
+    parameters
+  in
+  aux StringSet.empty parameters body
+
 let rec compile func env tree =
   match tree with
   | T_Let (name, T_Function fn, next, _, _) ->
+    (* TODO: Pass actual refence to function.
+       Either a closure or a global function. *)
+    let env = Env.add name (Int32 0l) env in
+
+    let free_variables = find_free_variables env fn.parameters fn.body in
+    let rec aux vars =
+      match vars () with
+      | Seq.Cons (var, next) -> (var, Env.find var fn.env) :: aux next
+      | Seq.Nil -> fn.parameters
+    in
+    let fn =
+      { fn with
+        parameters = aux (StringSet.to_seq free_variables) }
+    in
     Queue.push
       (name, fn)
       remaining_functions;
@@ -191,14 +260,14 @@ let rec compile func env tree =
       ; Assign (value, I_load (Ptr, Reg (Ptr, ptr), Int32 8l))];
     Reg (Ptr, value)
 
-  | T_Second (tuple, _typ, _) ->
+  | T_Second (tuple, typ, _) ->
     let ptr = create_register func "v" in
     let value = create_register func "v" in
-    (* TODO: Fix getelementptr type. *)
+    let loaded_element_type = type_to_llvm typ in
     push_instructions func
       [ Assign (ptr, I_getelementptr (Ptr, compile func env tuple, Int32 1l))
-      ; Assign (value, I_load (Ptr, Reg (Ptr, ptr), Int32 8l))];
-    Reg (Ptr, value)
+      ; Assign (value, I_load (loaded_element_type, Reg (Ptr, ptr), Int32 8l))];
+    Reg (loaded_element_type, value)
 
   (* TODO:
     - GC

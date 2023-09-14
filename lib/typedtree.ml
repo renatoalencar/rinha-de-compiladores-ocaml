@@ -1,6 +1,12 @@
 
 open Parsetree
 
+module Env = struct
+  include Map.Make(String)
+  let pp _ _ _ = ()
+end
+
+
 type typ =
   | Int
   | Str
@@ -59,11 +65,10 @@ and call =
 and func =
   { parameters : (string * typ) list
   ; body : typed_tree
+  ; env : typ Env.t
   ; typ : typ
   ; loc : loc }
 [@@deriving show]
-
-module Env = Map.Make(String)
 
 let type_env = Hashtbl.create 1024
 let counter = ref 0
@@ -162,6 +167,7 @@ let rec of_parsed_tree ~env tree =
       T_Function
         { parameters = types
         ; body
+        ; env
         ; loc = fn_loc
         ; typ = fn_type }
     in
@@ -173,6 +179,7 @@ let rec of_parsed_tree ~env tree =
     T_Function
       { parameters = types
       ; body
+      ; env
       ; loc
       ; typ = Arrow (List.map (fun (_, typ) -> typ) types, find_type body) }
 
@@ -292,10 +299,11 @@ let resolve_type_variables typed_tree =
         ; rhs = resolve rhs
         ; typ = resolve_variable typ
         ; loc }
-    | T_Function { parameters; body; typ; loc } ->
+    | T_Function { parameters; body; typ; loc; env } ->
       T_Function
         { parameters = List.map (fun (name, typ) -> name, resolve_variable typ) parameters
         ; body = resolve body
+        ; env = env
         ; typ = resolve_variable typ
         ; loc }
     | T_Let (name, value, next, typ, loc) ->

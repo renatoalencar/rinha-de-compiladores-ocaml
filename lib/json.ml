@@ -9,12 +9,25 @@ type loc = Parsetree.loc =
 type var = { text: string; location: loc }
 [@@deriving of_yojson]
 
-let operation_of_yojson = function
-  | `String "Add" -> Add
-  | `String "Sub" -> Sub
-  | `String "Lt" -> Lt
-  | `String "Eq" -> Eq
-  | `String "Or" -> Or
+let parse_string = function
+  | `String s -> s
+  | _ -> assert false
+
+let operation_of_yojson op = 
+  match parse_string op with
+  | "Add" -> Add
+  | "Sub" -> Sub
+  | "Mul" -> Mul
+  | "Lt" -> Lt
+  | "Eq" -> Eq
+  | "Neq" -> Neq
+  | "Or" -> Or
+  | "Div" -> Div
+  | "Rem" -> Rem
+  | "Gt" -> Gt
+  | "Lte" -> Lte
+  | "Gte" -> Gte
+  | "And" -> And
   | _ -> assert false
 
 let var_of_yojson yojson =
@@ -24,10 +37,6 @@ let loc_of_yojson yojson =
 
 let parse_list f = function
   | `List lst -> List.map f lst
-  | _ -> assert false
-
-let parse_string = function
-  | `String s -> s
   | _ -> assert false
 
 let parse_bool = function
