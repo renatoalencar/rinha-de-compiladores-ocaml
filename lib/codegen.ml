@@ -3,6 +3,7 @@ open Typedtree
 
 let remaining_functions = Queue.create ()
 let remaining_strings = Queue.create ()
+let pushed_strings = Hashtbl.create 64
 
 open Llvm
 
@@ -11,6 +12,7 @@ let type_to_llvm typ =
   | Int -> I32
   | Bool -> I1
   | Str -> Ptr
+  | Tuple _ -> Array (2, Ptr)
   | _ -> assert false
 
 let compile_binary func op typ lhs lhs_type rhs _rhs_type =
@@ -37,36 +39,49 @@ let compile_binary func op typ lhs lhs_type rhs _rhs_type =
   push_instruction func (Assign (reg, instr));
   Reg (result_type, reg)
 
-let compile_string_concatenation func lhs lhs_type rhs rhs_type =
-  let reg = create_register func "v" in
-  let instr =
-  match lhs_type, rhs_type with
-  | Str, Str ->
-    [ Assign (reg, I_call (Ptr, "rinha_strcat", [ lhs; rhs  ])) ]
-  | Int, Str ->
-    let int' = create_register func "v" in
-    let str = force_ptr rhs in
-    [ Assign (int', I_call (Ptr, "int_to_string", [ lhs ]))
-    ; Assign (reg, I_call (Ptr, "rinha_strcat", [ Reg (Ptr, int') ; str  ])) ]
-  | Str, Int ->
-    let int' = create_register func "v" in
-    let str = force_ptr lhs in
-    [ Assign (int', I_call (Ptr, "int_to_string", [ rhs ]))
-    ; Assign (reg, I_call (Ptr, "rinha_strcat", [ str; Reg (Ptr, int')  ])) ]
-  | _ -> assert false
-  in
-  push_instructions func instr;
-  Reg (Ptr, reg)
+let compile_string func value =
+  match Hashtbl.find_opt pushed_strings value with
+  | Some value -> value
+  | None ->
+    let label = create_label func ".str" in
+    Queue.push (label, value) remaining_strings;
+    let llvm_value: Llvm.value = Label (Array (String.length value - 1, I8) , label) in
+    Hashtbl.add pushed_strings value llvm_value;
+    llvm_value
 
-let compile_string_convertion func expr compiled' =
-  match find_type expr with
+let compile_string_convertion func typ compiled' =
+  match typ with
   | Str -> compiled'
   | Int ->
     let str' = create_register func "v" in
     push_instruction func
       (Assign (str', I_call (Ptr, "int_to_string", [ compiled' ])));
     Reg (Ptr, str')
+  | Bool ->
+    let true' = compile_string func "true" in
+    let false' = compile_string func "false" in
+    let str = create_register func "v" in
+    push_instruction func
+      (Assign (str, I_select (compiled', true', false')));
+    Reg (Ptr, str)
   | _ -> assert false
+
+let compile_string_concatenation func lhs lhs_type rhs rhs_type =
+  let reg = create_register func "v" in
+  let instr =
+  match lhs_type, rhs_type with
+  | Str, Str ->
+    [ Assign (reg, I_call (Ptr, "rinha_strcat", [ lhs; rhs  ])) ]
+  | typ, Str ->
+    let term' = compile_string_convertion func typ lhs in
+    [ Assign (reg, I_call (Ptr, "rinha_strcat", [ term'; force_ptr rhs  ])) ]
+  | Str, typ ->
+    let term' = compile_string_convertion func typ rhs in
+    [ Assign (reg, I_call (Ptr, "rinha_strcat", [ force_ptr lhs; term'  ])) ]
+  | _ -> assert false
+  in
+  push_instructions func instr;
+  Reg (Ptr, reg)
 
 let rec compile func env tree =
   match tree with
@@ -78,7 +93,7 @@ let rec compile func env tree =
 
   | T_Print (expr, _) ->
     let expr' = compile func env expr in
-    let str' = compile_string_convertion func expr expr' in
+    let str' = compile_string_convertion func (find_type expr) expr' in
     push_instruction func
       (Call (Void, "print", [ str' ]));
     Int1 0
@@ -102,9 +117,7 @@ let rec compile func env tree =
   | T_Bool (value, _) -> if value then Int1 1 else Int1 0
 
   | T_Str (value, _) ->
-    let label = create_label func ".str" in
-    Queue.push (label, value) remaining_strings;
-    Label (Array (String.length value - 1, I8) , label)
+    compile_string func value
 
   | T_Binary { lhs; op = Add; rhs; typ = Str; _ } ->
     let l' = compile func env lhs in
@@ -155,8 +168,39 @@ let rec compile func env tree =
     let value' = compile func env value in
     compile func (Env.add name value' env) next
 
+  | T_Tuple (t1, t2, typ, _) ->
+    let t1 = compile func env t1 in
+    let t2 = compile func env t2 in
+    let v = create_register func "v" in
+    let ptr = Reg (Ptr, v) in
+    let el1 = create_register func "v" in 
+    let el2 = create_register func "v" in 
+    push_instructions func
+      [ Assign (v, I_call (Ptr, "malloc", [ Int32 16l ]))
+      ; Assign (el1, I_getelementptr (type_to_llvm typ, ptr, Int32 0l))
+      ; Store (t1, Reg (Ptr, el1), Int32 8l)
+      ; Assign (el2, I_getelementptr (type_to_llvm typ, ptr, Int32 1l))
+      ; Store (t2, Reg (Ptr, el2), Int32 8l) ];
+    Ptr (type_to_llvm typ, Reg (Ptr, v))
+
+  | T_First (tuple, typ, _) ->
+    let ptr = create_register func "v" in
+    let value = create_register func "v" in
+    push_instructions func
+      [ Assign (ptr, I_getelementptr (type_to_llvm typ, compile func env tuple, Int32 0l))
+      ; Assign (value, I_load (Ptr, Reg (Ptr, ptr), Int32 8l))];
+    Reg (Ptr, value)
+
+  | T_Second (tuple, _typ, _) ->
+    let ptr = create_register func "v" in
+    let value = create_register func "v" in
+    (* TODO: Fix getelementptr type. *)
+    push_instructions func
+      [ Assign (ptr, I_getelementptr (Ptr, compile func env tuple, Int32 1l))
+      ; Assign (value, I_load (Ptr, Reg (Ptr, ptr), Int32 8l))];
+    Reg (Ptr, value)
+
   (* TODO:
-    - Tuples
     - GC
     - Anonymous functions and lambda lifting
     - Closures (variables in scope) *)
@@ -199,10 +243,19 @@ let compile_remaining_functions output functions =
     Llvm.write_to_file output llvm_function
   done
 
+(* External functions *)
+let header: (string * typ * typ list) list =
+  [ "print"        , Void, [ Ptr ]
+  ; "rinha_strcat", Void, [ Ptr; Ptr ]
+  ; "int_to_string", Ptr , [ Ptr; Ptr ]
+  ; "malloc"       , Ptr , [ I32 ] ]
+
 let compile_main output tree =
-  Llvm.write_declare output "print" Void [ Ptr ];
-  Llvm.write_declare output "rinha_strcat" Ptr [ Ptr; Ptr ];
-  Llvm.write_declare output "int_to_string" Ptr [ type_to_llvm Int ];
+  List.iter
+    (fun (name, return_type, arg_types) ->
+      Llvm.write_declare output name return_type arg_types)
+    header;
+
   let main = Llvm.create_function "main" I32 [] in
   let _ = compile main Env.empty tree in
   push_instruction main

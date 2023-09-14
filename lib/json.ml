@@ -30,6 +30,10 @@ let parse_string = function
   | `String s -> s
   | _ -> assert false
 
+let parse_bool = function
+  | `Bool s -> s
+  | _ -> assert false
+
 let parse_int = function
   | `Int s -> s
   | _ -> assert false
@@ -99,6 +103,23 @@ let rec parse_expression expr =
     let value = parse_string @@ List.assoc "value" expr in
     let loc = loc_of_yojson @@ List.assoc "location" expr in
     E_Str (value, loc)
+  | `String "Bool" ->
+    let value = parse_bool @@ List.assoc "value" expr in
+    let loc = loc_of_yojson @@ List.assoc "location" expr in
+    E_Bool (value, loc)
+  | `String "Tuple" ->
+    let first = parse_expression @@ List.assoc "first" expr in
+    let second = parse_expression @@ List.assoc "second" expr in
+    let loc = loc_of_yojson @@ List.assoc "location" expr in
+    E_Tuple (first, second, loc)
+  | `String "First" ->
+    let tuple = parse_expression @@ List.assoc "value" expr in
+    let loc = loc_of_yojson @@ List.assoc "location" expr in
+    E_First (tuple, loc)
+  | `String "Second" ->
+    let tuple = parse_expression @@ List.assoc "value" expr in
+    let loc = loc_of_yojson @@ List.assoc "location" expr in
+    E_Second (tuple, loc)
   | t -> Format.eprintf "Unsupported: %s\n"
     @@ Yojson.Safe.to_string t;
     exit 1

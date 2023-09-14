@@ -37,6 +37,9 @@ type instr =
   | I_call of typ * string * value list
   | I_phi of typ * ( value * string ) * ( value * string )
   | I_bitcast of value * typ
+  | I_select of value * value * value
+  | I_load of typ * value * value
+  | I_getelementptr of typ * value * value
 
 type function_toplevel =
   | Assign of string * instr
@@ -45,7 +48,7 @@ type function_toplevel =
   | Br of value * string * string
   | Br_Label of string
   | Ret of value
-  | Store of typ * value * value * value
+  | Store of value * value * value
 
 type func =
   { name : string
@@ -91,13 +94,15 @@ let cmp_to_string = function
   | Sge -> "sge"
   | Sgt -> "sgt"
 
-let value_to_string ?(ignore_type = false) typ =
+let rec value_to_string ?(ignore_type = false) typ =
   let typ, str =
   match typ with
     | Reg (typ, reg) -> typ, reg
     | Int32 int32 -> I32, Int32.to_string int32
+    | Int1 value -> I1, string_of_int value
     | Label (typ, label) -> typ, "@" ^ label
-    | value -> Format.eprintf "ERROR %a\n" pp_value value; exit 1
+    | Ptr (typ, value) -> typ, value_to_string ~ignore_type:true value
+    (* | value -> Format.eprintf "ERROR %a\n" pp_value value; exit 1 *)
   in
   if ignore_type then str
   else type_to_string typ ^ " " ^ str
@@ -165,6 +170,21 @@ let write_instr fmt = function
     Format.fprintf fmt "bitcast %s to %s"
       (value_to_string value)
       (type_to_string typ)
+  | I_select (v, t', f') ->
+    Format.fprintf fmt "select %s, %s, %s"
+      (value_to_string v)
+      (value_to_string t')
+      (value_to_string f')
+  | I_load (typ, ptr, alignment) ->
+    Format.fprintf fmt "load %s, %s ;;, align %s"
+      (type_to_string typ)
+      (value_to_string ptr)
+      (value_to_string ~ignore_type:true alignment)
+  | I_getelementptr (typ, ptr, pos) ->
+    Format.fprintf fmt "getelementptr %s, %s, %s"
+      (type_to_string typ)
+      (value_to_string ptr)
+      (value_to_string pos)
 
 let write_toplevel fmt = function
   | Assign (dest_reg, instr) -> Format.fprintf fmt "\t%s = %a\n" dest_reg write_instr instr
@@ -180,10 +200,9 @@ let write_toplevel fmt = function
     Format.fprintf fmt "\tbr label %%%s\n" name
   | Ret value ->
     Format.fprintf fmt "\tret %s\n" (value_to_string value)
-  | Store (typ, value, ptr, index) ->
-    Format.fprintf fmt "\tstore %s %s, ptr %s, alignment %s\n"
-      (type_to_string typ)
-      (value_to_string value) (value_to_string ptr) (value_to_string index)
+  | Store (value, ptr, index) ->
+    Format.fprintf fmt "\tstore %s, %s ;;, align %s\n"
+      (value_to_string value) (value_to_string ptr) (value_to_string ~ignore_type:true index)
 
 let write_to_file output { name; return_type; body; arguments; _ } =
   let fmt = Format.formatter_of_out_channel output in
