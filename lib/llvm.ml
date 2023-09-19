@@ -226,6 +226,7 @@ let write_declare output name return_type arguments =
 
 let write_string output label str =
   let fmt = Format.formatter_of_out_channel output in
-  Format.fprintf fmt "@%s = private constant [%d x i8] c\"%s\\00\"\n"
-    label (String.length str + 1) str;
+  let len = String.length str + 1 in 
+  Format.fprintf fmt "@%s = private constant <{ i64, [%d x i8] }> <{ i64 %d, [%d x i8] c\"%s\\00\" }>, align 8 \n"
+    label len len len str;
   Format.pp_print_flush fmt ()

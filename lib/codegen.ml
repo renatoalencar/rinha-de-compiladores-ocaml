@@ -55,7 +55,7 @@ let compile_string_convertion func typ compiled' =
   | Int ->
     let str' = create_register func "v" in
     push_instruction func
-      (Assign (str', I_call (Ptr, "int_to_string", [ compiled' ])));
+      (Assign (str', I_call (Ptr, "rinha_int_to_string", [ compiled' ])));
     Reg (Ptr, str')
   | Bool ->
     let true' = compile_string func "true" in
@@ -82,6 +82,26 @@ let compile_string_concatenation func lhs lhs_type rhs rhs_type =
   in
   push_instructions func instr;
   Reg (Ptr, reg)
+
+let compile_alloc func words tag =
+  let ptr = create_register func "v" in 
+  push_instruction func
+    ( Assign (ptr, I_call (Ptr, "rinha_alloc", [ Int32 Int32.(mul words 8l); Int32 tag ])) );
+  Reg (Ptr, ptr)
+
+let compile_array_load func _typ arr pos =
+  let ptr = create_register func "v" in
+  let value = create_register func "v" in
+  push_instructions func
+    [ Assign (ptr, I_getelementptr (Ptr, arr, pos))
+    ; Assign (value, I_load (Ptr, Reg (Ptr, ptr), Int32 8l))];
+  Reg (Ptr, value)
+
+let compile_array_store func typ arr pos value =
+  let el_ptr = create_register func "v" in 
+  push_instructions func
+    [ Assign (el_ptr, I_getelementptr (type_to_llvm typ, arr, pos))
+    ; Store (value, Reg (Ptr, el_ptr), Int32 8l) ]
 
 module StringSet = Set.Make(String)
 
@@ -164,7 +184,7 @@ let rec compile func env tree =
     let expr' = compile func env expr in
     let str' = compile_string_convertion func (find_type expr) expr' in
     push_instruction func
-      (Call (Void, "print", [ str' ]));
+      (Call (Void, "rinha_print", [ str' ]));
     Int1 0
 
   | T_Call { callee = T_Var (name, _, _); arguments; typ; _ } ->
@@ -237,42 +257,25 @@ let rec compile func env tree =
     let value' = compile func env value in
     compile func (Env.add name value' env) next
 
-  | T_Tuple (t1, t2, typ, _) ->
+  | T_Tuple (t0, t1, typ, _) ->
+    let t0 = compile func env t0 in
     let t1 = compile func env t1 in
-    let t2 = compile func env t2 in
-    let v = create_register func "v" in
-    let ptr = Reg (Ptr, v) in
-    let el1 = create_register func "v" in 
-    let el2 = create_register func "v" in 
-    push_instructions func
-      [ Assign (v, I_call (Ptr, "malloc", [ Int32 16l ]))
-      ; Assign (el1, I_getelementptr (type_to_llvm typ, ptr, Int32 0l))
-      ; Store (t1, Reg (Ptr, el1), Int32 8l)
-      ; Assign (el2, I_getelementptr (type_to_llvm typ, ptr, Int32 1l))
-      ; Store (t2, Reg (Ptr, el2), Int32 8l) ];
-    Ptr (type_to_llvm typ, Reg (Ptr, v))
+    let ptr = compile_alloc func 2l 2l in
+    compile_array_store func typ ptr (Int32 0l) t0;
+    compile_array_store func typ ptr (Int32 1l) t1;
+    Ptr (type_to_llvm typ, ptr)
 
   | T_First (tuple, typ, _) ->
-    let ptr = create_register func "v" in
-    let value = create_register func "v" in
-    push_instructions func
-      [ Assign (ptr, I_getelementptr (type_to_llvm typ, compile func env tuple, Int32 0l))
-      ; Assign (value, I_load (Ptr, Reg (Ptr, ptr), Int32 8l))];
-    Reg (Ptr, value)
+    compile_array_load func typ (compile func env tuple) (Int32 0l)
 
   | T_Second (tuple, typ, _) ->
-    let ptr = create_register func "v" in
-    let value = create_register func "v" in
-    let loaded_element_type = type_to_llvm typ in
-    push_instructions func
-      [ Assign (ptr, I_getelementptr (Ptr, compile func env tuple, Int32 1l))
-      ; Assign (value, I_load (loaded_element_type, Reg (Ptr, ptr), Int32 8l))];
-    Reg (loaded_element_type, value)
+    compile_array_load func typ (compile func env tuple) (Int32 1l)
 
   (* TODO:
     - GC
     - Anonymous functions and lambda lifting
-    - Closures (variables in scope) *)
+    - Closures (variables in scope) 
+    - Dynamic dispatching *)
 
   | t ->
     Format.eprintf "ERROR: %a\n" pp_typed_tree t;
@@ -281,6 +284,7 @@ let rec compile func env tree =
 let compile_strings output =
   while not @@ Queue.is_empty remaining_strings do
     let label, str = Queue.pop remaining_strings in
+    (* TODO: Escape strings *)
     Llvm.write_string output label str
   done
 
@@ -314,10 +318,11 @@ let compile_remaining_functions output functions =
 
 (* External functions *)
 let header: (string * typ * typ list) list =
-  [ "print"        , Void, [ Ptr ]
-  ; "rinha_strcat", Void, [ Ptr; Ptr ]
-  ; "int_to_string", Ptr , [ Ptr; Ptr ]
-  ; "malloc"       , Ptr , [ I32 ] ]
+  [ "rinha_print"         , Void, [ Ptr ]
+  ; "rinha_strcat"        , Void, [ Ptr; Ptr ]
+  ; "rinha_int_to_string" , Ptr , [ Ptr; Ptr ]
+  ; "rinha_alloc"         , Ptr , [ I32; I32 ]
+  ; "rinha_init_memory"   , Void, [] ]
 
 let compile_main output tree =
   List.iter
@@ -326,9 +331,12 @@ let compile_main output tree =
     header;
 
   let main = Llvm.create_function "main" I32 [] in
+  push_instruction main
+      (Call (Void, "rinha_init_memory", []));
   let _ = compile main Env.empty tree in
   push_instruction main
     (Ret (Int32 0l));
+
   compile_strings output;
   Llvm.write_to_file output main;
   compile_remaining_functions output remaining_functions
