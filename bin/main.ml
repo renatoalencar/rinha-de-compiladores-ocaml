@@ -44,6 +44,6 @@ let main () =
   close_out output;
 
   let objfile = compile_module output_filename in
-  link_program [objfile; "runtime.o"; "crt0.o"; "-lc"] Sys.argv.(2)
+  link_program [objfile; "runtime.o" ] Sys.argv.(2)
 
 let () = main ()

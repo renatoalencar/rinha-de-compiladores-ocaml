@@ -86,16 +86,20 @@ let compile_string_concatenation func lhs lhs_type rhs rhs_type =
 let compile_alloc func words tag =
   let ptr = create_register func "v" in 
   push_instruction func
-    ( Assign (ptr, I_call (Ptr, "rinha_alloc", [ Int32 Int32.(mul words 8l); Int32 tag ])) );
+    ( Assign (ptr, I_call (Ptr, "rinha_alloc", [ Int32 words; Int32 tag ])) );
   Reg (Ptr, ptr)
 
-let compile_array_load func _typ arr pos =
+let gc_add_global func value =
+  push_instruction func
+    (Call (Void, "rinha_gc_add_root", [ value ]))
+
+let compile_array_load func typ arr pos =
   let ptr = create_register func "v" in
   let value = create_register func "v" in
   push_instructions func
     [ Assign (ptr, I_getelementptr (Ptr, arr, pos))
-    ; Assign (value, I_load (Ptr, Reg (Ptr, ptr), Int32 8l))];
-  Reg (Ptr, value)
+    ; Assign (value, I_load (type_to_llvm typ, Reg (Ptr, ptr), Int32 8l))];
+  Reg (type_to_llvm typ, value)
 
 let compile_array_store func typ arr pos value =
   let el_ptr = create_register func "v" in 
@@ -158,7 +162,7 @@ let find_free_variables env parameters body =
   in
   aux StringSet.empty parameters body
 
-let rec compile func env tree =
+let rec compile global func env tree =
   match tree with
   | T_Let (name, T_Function fn, next, _, _) ->
     (* TODO: Pass actual refence to function.
@@ -178,10 +182,10 @@ let rec compile func env tree =
     Queue.push
       (name, fn)
       remaining_functions;
-    compile func env next
+    compile global func env next
 
   | T_Print (expr, _) ->
-    let expr' = compile func env expr in
+    let expr' = compile false func env expr in
     let str' = compile_string_convertion func (find_type expr) expr' in
     push_instruction func
       (Call (Void, "rinha_print", [ str' ]));
@@ -192,7 +196,7 @@ let rec compile func env tree =
       arguments
       |> List.map
         (fun expr ->
-          compile func env expr)
+          compile false func env expr)
     in
     let retval = create_register func "v" in
     let return_type = type_to_llvm typ in
@@ -209,15 +213,15 @@ let rec compile func env tree =
     compile_string func value
 
   | T_Binary { lhs; op = Add; rhs; typ = Str; _ } ->
-    let l' = compile func env lhs in
-    let r' = compile func env rhs in
+    let l' = compile global func env lhs in
+    let r' = compile global func env rhs in
     compile_string_concatenation func
       l' (find_type lhs)
       r' (find_type rhs)
 
   | T_Binary { lhs; op; rhs; typ; _ } ->
-    let l' = compile func env lhs in
-    let r' = compile func env rhs in
+    let l' = compile global func env lhs in
+    let r' = compile global func env rhs in
     compile_binary func op typ
       l' (find_type lhs)
       r' (find_type rhs)
@@ -226,7 +230,7 @@ let rec compile func env tree =
     Env.find name env
 
   | T_If { predicate; consequent; alternative; typ; _ } ->
-    let pred' = compile func env predicate in
+    let pred' = compile global func env predicate in
     let consequent_label = Llvm.create_label func "if_then" in
     let alternative_label = Llvm.create_label func "if_else" in
     let end_label = Llvm.create_label func "if_end" in
@@ -235,12 +239,12 @@ let rec compile func env tree =
       [ Br (pred', consequent_label, alternative_label)
       ; Label alternative_label ];
 
-    let alternative_value = compile func env alternative in
+    let alternative_value = compile global func env alternative in
     push_instructions func
       [ Br_Label end_label
       ; Label consequent_label ];
 
-    let consequent_value = compile func env consequent in
+    let consequent_value = compile global func env consequent in
     push_instructions func
       [ Br_Label end_label
       ; Label end_label ];
@@ -253,26 +257,30 @@ let rec compile func env tree =
           , (alternative_value, alternative_label))));
     Reg (type_to_llvm typ, if_value)
 
-  | T_Let (name, value, next, _typ, _loc) ->
-    let value' = compile func env value in
-    compile func (Env.add name value' env) next
+  | T_Let (name, value, next, typ, _loc) ->
+    let value' = compile false func env value in
+    let () =
+      match typ with
+      | Int | Bool -> ()
+      | _ -> if global then gc_add_global func value'
+    in
+    compile global func (Env.add name value' env) next
 
   | T_Tuple (t0, t1, typ, _) ->
-    let t0 = compile func env t0 in
-    let t1 = compile func env t1 in
+    let t0 = compile global func env t0 in
+    let t1 = compile global func env t1 in
     let ptr = compile_alloc func 2l 2l in
     compile_array_store func typ ptr (Int32 0l) t0;
     compile_array_store func typ ptr (Int32 1l) t1;
     Ptr (type_to_llvm typ, ptr)
 
   | T_First (tuple, typ, _) ->
-    compile_array_load func typ (compile func env tuple) (Int32 0l)
+    compile_array_load func typ (compile global func env tuple) (Int32 0l)
 
   | T_Second (tuple, typ, _) ->
-    compile_array_load func typ (compile func env tuple) (Int32 1l)
+    compile_array_load func typ (compile global func env tuple) (Int32 1l)
 
   (* TODO:
-    - GC
     - Anonymous functions and lambda lifting
     - Closures (variables in scope) 
     - Dynamic dispatching *)
@@ -309,7 +317,7 @@ let compile_remaining_functions output functions =
       | _ -> assert false
     in
     let llvm_function = Llvm.create_function name (type_to_llvm return_type) args in
-    let return_value = compile llvm_function env func.body in
+    let return_value = compile false llvm_function env func.body in
     push_instruction llvm_function
       (Ret return_value);
     compile_strings output;
@@ -333,7 +341,7 @@ let compile_main output tree =
   let main = Llvm.create_function "main" I32 [] in
   push_instruction main
       (Call (Void, "rinha_init_memory", []));
-  let _ = compile main Env.empty tree in
+  let _ = compile true main Env.empty tree in
   push_instruction main
     (Ret (Int32 0l));
 

@@ -119,7 +119,8 @@ let force_ptr = function
   | _ -> assert false
 
 let write_call fmt typ name arguments =
-  Format.fprintf fmt "call %s @%s(%s)"
+  (* TODO: Looks like LLVM can forgive this `tail` but we shouldn't count on it. *)
+  Format.fprintf fmt "tail call %s @%s(%s)"
     (type_to_string typ)
     name
     (String.concat ", "
