@@ -54,6 +54,7 @@ let compile_string_convertion func typ compiled' =
   | Str -> compiled'
   | Int ->
     let str' = create_register func "v" in
+    func.allocations <- Int32.add func.allocations 1l;
     push_instruction func
       (Assign (str', I_call (Ptr, "rinha_int_to_string", [ compiled' ])));
     Reg (Ptr, str')
@@ -68,6 +69,7 @@ let compile_string_convertion func typ compiled' =
 
 let compile_string_concatenation func lhs lhs_type rhs rhs_type =
   let reg = create_register func "v" in
+  func.allocations <- Int32.add func.allocations 1l;
   let instr =
   match lhs_type, rhs_type with
   | Str, Str ->
@@ -84,7 +86,8 @@ let compile_string_concatenation func lhs lhs_type rhs rhs_type =
   Reg (Ptr, reg)
 
 let compile_alloc func words tag =
-  let ptr = create_register func "v" in 
+  let ptr = create_register func "v" in
+  func.allocations <- Int32.add func.allocations 1l;
   push_instruction func
     ( Assign (ptr, I_call (Ptr, "rinha_alloc", [ Int32 words; Int32 tag ])) );
   Reg (Ptr, ptr)
@@ -185,7 +188,7 @@ let rec compile global func env tree =
     compile global func env next
 
   | T_Print (expr, _) ->
-    let expr' = compile false func env expr in
+    let expr' = compile global func env expr in
     let str' = compile_string_convertion func (find_type expr) expr' in
     push_instruction func
       (Call (Void, "rinha_print", [ str' ]));
@@ -257,13 +260,9 @@ let rec compile global func env tree =
           , (alternative_value, alternative_label))));
     Reg (type_to_llvm typ, if_value)
 
-  | T_Let (name, value, next, typ, _loc) ->
+  | T_Let (name, value, next, _typ, _loc) ->
     let value' = compile false func env value in
-    let () =
-      match typ with
-      | Int | Bool -> ()
-      | _ -> if global then gc_add_global func value'
-    in
+    if global then (match (find_type value) with Int | Bool -> () | _ -> gc_add_global func value');
     compile global func (Env.add name value' env) next
 
   | T_Tuple (t0, t1, typ, _) ->
@@ -330,7 +329,9 @@ let header: (string * typ * typ list) list =
   ; "rinha_strcat"        , Void, [ Ptr; Ptr ]
   ; "rinha_int_to_string" , Ptr , [ Ptr; Ptr ]
   ; "rinha_alloc"         , Ptr , [ I32; I32 ]
-  ; "rinha_init_memory"   , Void, [] ]
+  ; "rinha_init_memory"   , Void, []
+  ; "rinha_gc_add_root"   , Void, [ Ptr ]
+  ; "rinha_require_allocations", Void, [ I32 ]]
 
 let compile_main output tree =
   List.iter

@@ -55,10 +55,11 @@ type func =
   ; return_type : typ
   ; arguments : typ list
   ; body : function_toplevel Queue.t
-  ; mutable counter : int }
+  ; mutable counter : int
+  ; mutable allocations : int32 }
 
 let create_function name return_type arguments =
-  { name; return_type; arguments; body = Queue.create (); counter = 0 }
+  { name; return_type; arguments; body = Queue.create (); allocations = 0l; counter = 0 }
 
 let create_register func prefix =
   let register = Printf.sprintf "%%%s%d" prefix func.counter in
@@ -205,12 +206,15 @@ let write_toplevel fmt = function
     Format.fprintf fmt "\tstore %s, %s ;;, align %s\n"
       (value_to_string value) (value_to_string ptr) (value_to_string ~ignore_type:true index)
 
-let write_to_file output { name; return_type; body; arguments; _ } =
+let write_to_file output { name; return_type; body; arguments; allocations; _ } =
   let fmt = Format.formatter_of_out_channel output in
   Format.fprintf fmt "define %s @%s(%s) {\n" (type_to_string return_type) name
     (arguments
       |> List.mapi (fun i typ -> Format.sprintf "%s %%%d" (type_to_string typ) i)
       |> String.concat ", ");
+
+  write_toplevel fmt (Call (Void, "rinha_require_allocations", [ Int32 allocations  ]));
+
   while not @@ Queue.is_empty body do
     let instr = Queue.pop body in
     write_toplevel fmt instr
@@ -227,7 +231,7 @@ let write_declare output name return_type arguments =
 
 let write_string output label str =
   let fmt = Format.formatter_of_out_channel output in
-  let len = String.length str + 1 in 
-  Format.fprintf fmt "@%s = private constant <{ i64, [%d x i8] }> <{ i64 %d, [%d x i8] c\"%s\\00\" }>, align 8 \n"
+  let len = String.length str in 
+  Format.fprintf fmt "@%s = private constant <{ i64, [%d x i8] }> <{ i64 %d, [%d x i8] c\"%s\" }>, align 8 \n"
     label len len len str;
   Format.pp_print_flush fmt ()

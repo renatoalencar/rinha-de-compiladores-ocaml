@@ -1,11 +1,10 @@
 #include <alloca.h>
 #include <stdlib.h>
 #include <stdio.h>
-#include <assert.h>
 
 #define RINHA_GC_ROOT_LIST_LENGTH 1024
 #define RINHA_GC_ARENA_SIZE 1024 * 1024
-#define RINHA_GC_MAXIMUM_ALLOCATIONS_BEFORE_GC 1000000
+#define RINHA_GC_MAXIMUM_ALLOCATIONS_BEFORE_GC 100000
 
 enum rinha_gc_tag_t {
   STRING = 1,
@@ -26,6 +25,8 @@ struct rinha_object_t {
   int16_t words;
   struct rinha_object_t *next;
 };
+
+#define OBJECT_ADDR(x) (void*) x - sizeof(struct rinha_object_t)
 
 struct rinha_gc_root_list_t {
   size_t size;
@@ -62,8 +63,8 @@ struct rinha_tuple_t {
 // TODO: Replace malloc/free with increment/compact (linear allocator + mark and compact gc)
 
 void rinha_init_memory() {
-  rinha_memory_state.heap_start = rinha_memory_state.heap_current = malloc(RINHA_GC_ARENA_SIZE);
-  rinha_memory_state.heap_end = rinha_memory_state.heap_start + RINHA_GC_ARENA_SIZE;
+  // rinha_memory_state.heap_start = rinha_memory_state.heap_current = malloc(RINHA_GC_ARENA_SIZE);
+  // rinha_memory_state.heap_end = rinha_memory_state.heap_start + RINHA_GC_ARENA_SIZE;
 }
 
 // Now every kid with a Commodore 64 can hack into NASA
@@ -76,13 +77,13 @@ static int rinha_is_integer(int64_t value) {
   // make it work. But since we don't have the same limitions and needs,
   // like supporting some 32 bit architectures we can leverage this fact
   // to avoid adding a few extra instructions for 32 bit arithmetic.
-  return (value >> 32) == 0;
+  return value <= 0xffffffff;
 }
 
 void rinha_gc_add_root(void* ptr) {
-  // if (rinha_is_integer((int64_t) ptr)) {
-  //   return;
-  // }
+  if (rinha_is_integer((int64_t) ptr)) {
+    return;
+  }
 
   struct rinha_object_t* object = ptr - sizeof(struct rinha_object_t);
   object->state = BLUE;
@@ -128,7 +129,7 @@ void queue_add(struct queue_t *queue, void* element) {
 }
 
 int queue_is_empty(struct queue_t *queue) {
-  return queue->last == NULL;
+  return queue->length == 0;
 }
 
 void* queue_pop(struct queue_t *queue) {
@@ -159,6 +160,10 @@ void rinha_gc_mark() {
     .first = NULL,
   };
 
+#ifdef DEBUG
+  printf("Scanning through %d roots\n", rinha_memory_state.roots.size);
+#endif
+
   for (int i = 0; i < rinha_memory_state.roots.size; i++) {
     queue_add(&work_queue, rinha_memory_state.roots.values[i]);
   }
@@ -181,7 +186,7 @@ void rinha_gc_mark() {
   int scanned_objects = 0;
 
   while (!queue_is_empty(&work_queue)) {
-    // printf("Queue size %d\n", work_queue.length);
+    // printf("Queue size %d - last %llx\n", work_queue.length, work_queue.last);
     struct rinha_object_t* object = queue_pop(&work_queue);
     scanned_objects++;
 
@@ -192,12 +197,13 @@ void rinha_gc_mark() {
     switch (object->tag) {
       case TUPLE: {
           struct rinha_tuple_t *tuple = (void*) &object[1];
+          // printf("%llx %llx\n", tuple->first, tuple->second);
 
           if (!rinha_is_integer((int64_t) tuple->first)) {
-            queue_add(&work_queue, tuple->first);
+            queue_add(&work_queue, OBJECT_ADDR(tuple->first));
           }
           if (!rinha_is_integer((int64_t) tuple->second)) {
-            queue_add(&work_queue, tuple->second);
+            queue_add(&work_queue, OBJECT_ADDR(tuple->second));
           }
         }
         break;
@@ -207,28 +213,35 @@ void rinha_gc_mark() {
         break;
 
       case STRING:
+        // TODO: How to deal with statically allocated strings?
+        // Depending on the control over address space, if it could be
+        // allocated within the 32 bit range it would bypass collection.
+
       default:
         break;
     }
   }
 
-  // printf("Scanned through %d objects\n", scanned_objects);
+#ifdef DEBUG
+  printf("Scanned through %d objects\n", scanned_objects);
+#endif
 }
 
 void rinha_gc_sweep() {
   struct rinha_object_t* object = object_list_head;
   struct rinha_object_t** previous = &object_list_head;
 
-  // int freed_objects = 0;
+  int freed_objects = 0;
   rinha_allocated_objects = 0;
 
   while (object != NULL) {
+    // printf("%llx %llx %d %d\n", object, object->next, object->tag, object->state);
     void* next = object->next;
 
     if (object->state == GREEN) {
       *previous = next;
       free(object);
-      // freed_objects++;
+      freed_objects++;
     } else {
       rinha_allocated_objects++;
       previous = &object->next;
@@ -237,13 +250,23 @@ void rinha_gc_sweep() {
     object = next;
   }
 
-  // printf("%d freed objects\n", freed_objects);
+#ifdef DEBUG
+  printf("%d freed objects\n", freed_objects);
+#endif
 }
 
 void rinha_run_gc() {
-  // printf("RUNNING GC\n");
+#ifdef DEBUG
+  printf("RUNNING GC\n");
+#endif
   rinha_gc_mark();
   rinha_gc_sweep();
+}
+
+void rinha_require_allocations(int allocations) {
+  if (rinha_allocated_objects + allocations > RINHA_GC_MAXIMUM_ALLOCATIONS_BEFORE_GC) {
+    rinha_run_gc();
+  }
 }
 
 void* rinha_alloc(int words, enum rinha_gc_tag_t tag) {
@@ -257,8 +280,7 @@ void* rinha_alloc(int words, enum rinha_gc_tag_t tag) {
   // rinha_memory_state.heap_current += size;
 
   // Only whe we build gc
-  struct rinha_object_t* object = malloc(words * 8 + sizeof(struct rinha_object_t));
-  assert(((int64_t) object & 0x1) == 0);
+  struct rinha_object_t* object = calloc(words * 8 + sizeof(struct rinha_object_t), 1);
 
   if (object == NULL) {
     // Probably a memory leak somewhere
@@ -288,7 +310,7 @@ struct rinha_string_t* rinha_int_to_string(int value) {
    * + 1 for null byte
    * + 4 for word alignment
    */
-  struct rinha_string_t* str = rinha_alloc(sizeof(size_t) + 16, STRING);
+  struct rinha_string_t* str = rinha_alloc(3, STRING);
 
   int is_negative = 0;
   if (value < 0) {
@@ -320,11 +342,11 @@ struct rinha_string_t* rinha_strcat(
   struct rinha_string_t* s2
 ) {
   struct rinha_string_t* result = rinha_alloc(
-    sizeof(size_t) + s1->length + s2->length,
+    (sizeof(size_t) + s1->length + s2->length) / 8 + 1,
     STRING
   );
   result->length = s1->length + s2->length;
-  
+
   void* ptr = rinha_memcpy(result->contents, s1->contents, s1->length);
   rinha_memcpy(ptr, s2->contents, s2->length);
 
@@ -343,4 +365,6 @@ void rinha_print(struct rinha_string_t* str) __attribute__((optnone)) {
   // TODO: Add line break?
   // TODO: When using -O3, fields arent properly accessed.
   rinha_write(1, str->contents, str->length);
+  // TODO: buffering everything before context switch is a lot faster.
+  rinha_write(1, "\n", 1);
 }
