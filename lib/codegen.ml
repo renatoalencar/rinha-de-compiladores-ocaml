@@ -192,7 +192,7 @@ let rec compile global func env tree =
     let str' = compile_string_convertion func (find_type expr) expr' in
     push_instruction func
       (Call (Void, "rinha_print", [ str' ]));
-    Int1 0
+    expr'
 
   | T_Call { callee = T_Var (name, _, _); arguments; typ; _ } ->
     let args =

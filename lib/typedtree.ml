@@ -84,7 +84,7 @@ let report_error ~loc message =
     message;
   exit 1
 
-let find_type tree =
+let rec find_type tree =
   match tree with
   | T_Int _ -> Int
   | T_Bool _ -> Bool
@@ -97,7 +97,7 @@ let find_type tree =
     | _ -> assert false)
   | T_Let (_name, _value, _next, typ, _loc) -> typ
   | T_If { typ; _ } -> typ
-  | T_Print _ -> Int
+  | T_Print (expr, _) -> find_type expr
   | T_First (_tuple, typ, _loc) -> typ
   | T_Second (_tuple, typ, _loc) -> typ
   | T_Tuple (_fst, _snd, typ, _loc) -> typ
