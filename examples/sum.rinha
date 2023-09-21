@@ -1,0 +1,17 @@
+let sum = fn (n, s) => {
+    let foo = (n - 1, s + 1);
+    if (n == 0) {
+        second(foo)
+    } else {
+        let _ = print("N " + n);
+        sum(first(foo), second(foo))
+    }
+};
+
+let sum2 = fn (n, s) => {
+    if (n == 0) { s }
+    else { sum2(n - 1, s + 1) }
+};
+
+let n = 5000;
+print(sum(n, 0))

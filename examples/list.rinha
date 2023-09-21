@@ -1,0 +1,5 @@
+let conss = fn(l, i) => {
+    l + i
+};
+
+print("Hello world")

@@ -1,0 +1,28 @@
+let exp = fn (n, e) => {
+    if (e == 0) {
+        1
+    } else {
+        n * exp(n, e - 1)
+    }
+};
+
+let abs = fn (n) => {
+    if (n < 0) { 0 - n } else { n }
+};
+
+let sqrt = fn (n, g, iterations) => {
+    if ((iterations == 0) || abs(n - (g * g)) < 10) {
+        g
+    } else {
+        let g = (g + (n / g)) / 2;
+        sqrt(n, g, iterations - 1)
+    }
+};
+
+let n = 2;
+let places = 4;
+
+let r = exp(10, places);
+let n = n * (r * r);
+let s = sqrt(n, 1, 100000);
+print(s / r + "." + s % r)

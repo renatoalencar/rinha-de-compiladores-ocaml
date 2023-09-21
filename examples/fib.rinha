@@ -1,0 +1,19 @@
+let fib = fn(n) => {
+    let fib_1 = fn (n, a, b) => {
+        if (n == 1) { b } else { fib_1(n - 1, b, a + b) }
+    };
+
+    if (n < 2) { n }
+    else { fib_1(n, 0, 1) }
+};
+
+let fib2 = fn(n) => {
+    if (n < 2) { n }
+    else { fib2(n - 1) + fib2(n - 2) }
+};
+
+let tuple = (41, 45);
+
+let n = second(tuple);
+
+print("Fib " + n + " = " + fib(n))
