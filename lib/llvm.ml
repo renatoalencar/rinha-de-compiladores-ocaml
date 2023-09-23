@@ -7,11 +7,13 @@ type typ =
   | Void
   | Ptr
   | Array of int * typ
+  | Fn of typ * typ list
 [@@deriving show]
 
 type value =
   | Ptr of typ * value
   | Label of typ * string
+  | Closure of (typ * string) list * value
   | Reg of typ * string
   | Int32 of int32
   | Int1 of int
@@ -34,7 +36,7 @@ type instr =
   | I_srem of typ * value * value
   | I_or of typ * value * value
   | I_and of typ * value * value
-  | I_call of typ * string * value list
+  | I_call of typ * value * value list
   | I_phi of typ * ( value * string ) * ( value * string )
   | I_bitcast of value * typ
   | I_select of value * value * value
@@ -86,7 +88,11 @@ let rec type_to_string = function
   | Ptr -> "ptr"
   | Array (size, typ) ->
     Printf.sprintf "[%d x %s]*" size (type_to_string typ)
-
+  | Fn (ret, args) ->
+    Printf.sprintf "%s (%s)"
+       (type_to_string ret)
+       (String.concat ", " @@ List.map type_to_string args)
+       
 let cmp_to_string = function
   | Sle -> "sle"
   | Slt -> "slt"
@@ -103,6 +109,7 @@ let rec value_to_string ?(ignore_type = false) typ =
     | Int1 value -> I1, string_of_int value
     | Label (typ, label) -> typ, "@" ^ label
     | Ptr (typ, value) -> typ, value_to_string ~ignore_type:true value
+    | _ -> assert false
     (* | value -> Format.eprintf "ERROR %a\n" pp_value value; exit 1 *)
   in
   if ignore_type then str
@@ -119,11 +126,11 @@ let force_ptr = function
   | Label (_, name) -> Label (Ptr, name)
   | _ -> assert false
 
-let write_call fmt typ name arguments =
+let write_call fmt typ fn arguments =
   (* TODO: Looks like LLVM can forgive this `tail` but we shouldn't count on it. *)
-  Format.fprintf fmt "tail call %s @%s(%s)"
+  Format.fprintf fmt "tail call %s %s(%s)"
     (type_to_string typ)
-    name
+    (value_to_string ~ignore_type:true fn)
     (String.concat ", "
       @@ List.map value_to_string arguments)
 
@@ -161,8 +168,8 @@ let write_instr fmt = function
     Format.fprintf fmt "and %s %s, %s"
       (type_to_string typ)
       (value_to_string ~ignore_type:true x) (value_to_string ~ignore_type:true y)
-  | I_call (typ, name, arguments) ->
-    write_call fmt typ name arguments
+  | I_call (typ, fn, arguments) ->
+    write_call fmt typ fn arguments
   | I_phi (typ, (r1, l1), (r2, l2)) ->
     Format.fprintf fmt "phi %s [ %s, %%%s ], [ %s, %%%s ]"
       (type_to_string typ)
@@ -193,7 +200,7 @@ let write_toplevel fmt = function
   | Label name -> Format.fprintf fmt "%s:\n" name
   | Call (typ, name, arguments) ->
     Format.pp_print_char fmt '\t';
-    write_call fmt typ name arguments;
+    write_call fmt typ (Label (Ptr, name)) arguments;
     Format.pp_print_char fmt '\n'
   | Br (cmp, if_true, if_false) ->
     Format.fprintf fmt "\tbr %s, label %%%s, label %%%s\n"

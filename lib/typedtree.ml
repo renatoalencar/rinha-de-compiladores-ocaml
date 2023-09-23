@@ -91,10 +91,7 @@ let rec find_type tree =
   | T_Str _ -> Str
   | T_Call { typ; _ } -> typ
   | T_Binary { typ; _ } -> typ
-  | T_Function { typ; _ } ->
-    (match typ with
-    | Arrow (_, ret) -> ret
-    | _ -> assert false)
+  | T_Function { typ; _ } -> typ
   | T_Let (_name, _value, _next, typ, _loc) -> typ
   | T_If { typ; _ } -> typ
   | T_Print (expr, _) -> find_type expr
@@ -127,7 +124,13 @@ let rec of_parsed_tree ~env tree =
       | Arrow (_, typ) as callee_type ->
         unify callee_type (Arrow (List.map find_type arguments, typ));
         typ
-      | _ -> report_error ~loc "Callee is not a function"
+      | t ->
+        let typ = create_var () in
+        unify t (Arrow (List.map find_type arguments, typ));
+	typ
+        (*Format.printf "%a has type %a\n" pp_typed_tree callee pp_typ t;
+	report_error ~loc "Callee is not a function."*)
+      
     in
     T_Call { callee; arguments; loc; typ = return_type  }
 
@@ -239,6 +242,7 @@ let rec of_parsed_tree ~env tree =
   | E_Error { message; loc; _ } -> report_error ~loc message
 
 and unify t1 t2 =
+  (* Format.printf "Unifying t1 %a t2 %a\n" pp_typ t1 pp_typ t2; *)
   match t1, t2 with
   | (Bool, Bool) | (Str, Str) | (Int, Int) -> ()
   | (Var v1, Var v2) when !v1 <> !v2 ->
@@ -268,7 +272,7 @@ and unify t1 t2 =
     Printf.eprintf "Type %s cant match %s"
       (type_to_string t1)
       (type_to_string t2);
-    exit 1
+    assert false
 
 and type_binary op lhs rhs =
     unify (find_type lhs) (find_type rhs);

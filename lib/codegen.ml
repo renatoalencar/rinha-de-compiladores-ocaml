@@ -13,7 +13,12 @@ let type_to_llvm typ =
   | Bool -> I1
   | Str -> Ptr
   | Tuple _ -> Array (2, Ptr)
-  | _ -> assert false
+  (* | Arrow (args, ret) -> Fn (type_to_llvm ret, List.map type_to_llvm args) *)
+  | Arrow _ -> Ptr
+  | Var _ -> Ptr
+  (* | t ->
+    Format.printf "Error: %a\n" Typedtree.pp_typ t;
+    assert false *)
 
 let compile_binary func op typ lhs lhs_type rhs _rhs_type =
   let open Parsetree in
@@ -56,7 +61,7 @@ let compile_string_convertion func typ compiled' =
     let str' = create_register func "v" in
     func.allocations <- Int32.add func.allocations 1l;
     push_instruction func
-      (Assign (str', I_call (Ptr, "rinha_int_to_string", [ compiled' ])));
+      (Assign (str', I_call (Ptr, Label (Ptr, "rinha_int_to_string"), [ compiled' ])));
     Reg (Ptr, str')
   | Bool ->
     let true' = compile_string func "true" in
@@ -73,13 +78,13 @@ let compile_string_concatenation func lhs lhs_type rhs rhs_type =
   let instr =
   match lhs_type, rhs_type with
   | Str, Str ->
-    [ Assign (reg, I_call (Ptr, "rinha_strcat", [ lhs; rhs  ])) ]
+    [ Assign (reg, I_call (Ptr, Label (Ptr, "rinha_strcat"), [ lhs; rhs  ])) ]
   | typ, Str ->
     let term' = compile_string_convertion func typ lhs in
-    [ Assign (reg, I_call (Ptr, "rinha_strcat", [ term'; force_ptr rhs  ])) ]
+    [ Assign (reg, I_call (Ptr, Label (Ptr, "rinha_strcat"), [ term'; force_ptr rhs  ])) ]
   | Str, typ ->
     let term' = compile_string_convertion func typ rhs in
-    [ Assign (reg, I_call (Ptr, "rinha_strcat", [ force_ptr lhs; term'  ])) ]
+    [ Assign (reg, I_call (Ptr, Label (Ptr, "rinha_strcat"), [ force_ptr lhs; term'  ])) ]
   | _ -> assert false
   in
   push_instructions func instr;
@@ -89,20 +94,31 @@ let compile_alloc func words tag =
   let ptr = create_register func "v" in
   func.allocations <- Int32.add func.allocations 1l;
   push_instruction func
-    ( Assign (ptr, I_call (Ptr, "rinha_alloc", [ Int32 words; Int32 tag ])) );
+    ( Assign (ptr, I_call (Ptr, Label (Ptr, "rinha_alloc"), [ Int32 words; Int32 tag ])) );
   Reg (Ptr, ptr)
 
 let gc_add_global func value =
   push_instruction func
     (Call (Void, "rinha_gc_add_root", [ value ]))
 
+let keep_only_global_values env =
+  let is_global (value: Llvm.value) =
+    match value with Label _ -> true | _ -> false
+  in
+  Env.filter (fun _ v -> is_global v) env
+
+let find_variable name env =
+  match Env.find_opt name env with
+  | Some value -> value
+  | None -> Printf.eprintf "Cant find variable %s\n" name; exit 404
+
 let compile_array_load func typ arr pos =
   let ptr = create_register func "v" in
   let value = create_register func "v" in
   push_instructions func
     [ Assign (ptr, I_getelementptr (Ptr, arr, pos))
-    ; Assign (value, I_load (type_to_llvm typ, Reg (Ptr, ptr), Int32 8l))];
-  Reg (type_to_llvm typ, value)
+    ; Assign (value, I_load (typ, Reg (Ptr, ptr), Int32 8l))];
+  Reg (typ, value)
 
 let compile_array_store func typ arr pos value =
   let el_ptr = create_register func "v" in 
@@ -165,25 +181,51 @@ let find_free_variables env parameters body =
   in
   aux StringSet.empty parameters body
 
+let name_counter = ref 0
+let create_name base =
+    incr name_counter;
+    base ^ string_of_int !name_counter
+
 let rec compile global func env tree =
   match tree with
-  | T_Let (name, T_Function fn, next, _, _) ->
+  | T_Function fn ->
+    let name = create_name "rinha_anon_closure" in
+    let env = keep_only_global_values env in
+    Queue.push (name, fn, env) remaining_functions;
+    let label: Llvm.value = Label (type_to_llvm (find_type tree), name) in
+    label
+
+  | T_Let (name, T_Function fn, next, _typ, _) ->
     (* TODO: Pass actual refence to function.
        Either a closure or a global function. *)
-    let env = Env.add name (Int32 0l) env in
-
-    let free_variables = find_free_variables env fn.parameters fn.body in
+    let free_variables =
+      (* Placeholder for recursive functions *)
+      let env = Env.add name (Int32 0l) (keep_only_global_values env) in
+      List.of_seq @@ StringSet.to_seq @@ find_free_variables env fn.parameters fn.body in
     let rec aux vars =
-      match vars () with
-      | Seq.Cons (var, next) -> (var, Env.find var fn.env) :: aux next
-      | Seq.Nil -> fn.parameters
+      match vars with
+      | [] -> fn.parameters
+      | var :: next -> (var, find_variable var fn.env) :: aux next
     in
+    let closure =
+      match free_variables with
+      | [] -> (Label (type_to_llvm fn.typ, name) : Llvm.value)
+      | _ ->
+        let length = List.length free_variables + 1 in
+        let closure = compile_alloc func (Int32.of_int length) 3l in
+        compile_array_store func Str closure (Int32 0l) (Label (type_to_llvm fn.typ, name) : Llvm.value);
+        List.iteri (fun idx name ->
+          compile_array_store func Str closure (Int32 Int32.(of_int (idx + 1))) (find_variable name env))
+          free_variables;
+        Closure (List.map (fun name -> type_to_llvm @@ Env.find name fn.env, name) free_variables, closure)
+    in
+    let env = Env.add name closure env in
     let fn =
       { fn with
-        parameters = aux (StringSet.to_seq free_variables) }
+        parameters = aux free_variables }
     in
     Queue.push
-      (name, fn)
+      (name, fn, keep_only_global_values env)
       remaining_functions;
     compile global func env next
 
@@ -203,8 +245,22 @@ let rec compile global func env tree =
     in
     let retval = create_register func "v" in
     let return_type = type_to_llvm typ in
+    let fn = find_variable name env in
+    let fn, free_variables =
+      match fn with
+      | Closure (free_variables, ptr) ->
+        let fn = compile_array_load func Ptr ptr (Int32 0l) in
+        let args =
+          List.mapi (fun idx (typ, _name) ->
+            compile_array_load func typ ptr (Int32 Int32.(of_int (idx + 1))))
+          free_variables
+        in
+        fn, args
+      | t -> t, []
+    in
+    (* Format.printf "%d %a\n" __LINE__ Llvm.pp_value fn; *)
     push_instruction func
-      (Assign (retval, I_call (return_type, name, args)));
+      (Assign (retval, I_call (return_type, fn, free_variables @ args)));
     Reg (return_type, retval)
 
   | T_Int (value, _) ->
@@ -230,7 +286,7 @@ let rec compile global func env tree =
       r' (find_type rhs)
 
   | T_Var (name, _, _) ->
-    Env.find name env
+    find_variable name env
 
   | T_If { predicate; consequent; alternative; typ; _ } ->
     let pred' = compile global func env predicate in
@@ -274,14 +330,12 @@ let rec compile global func env tree =
     Ptr (type_to_llvm typ, ptr)
 
   | T_First (tuple, typ, _) ->
-    compile_array_load func typ (compile global func env tuple) (Int32 0l)
+    compile_array_load func (type_to_llvm typ) (compile global func env tuple) (Int32 0l)
 
   | T_Second (tuple, typ, _) ->
-    compile_array_load func typ (compile global func env tuple) (Int32 1l)
+    compile_array_load func (type_to_llvm typ) (compile global func env tuple) (Int32 1l)
 
   (* TODO:
-    - Anonymous functions and lambda lifting
-    - Closures (variables in scope) 
     - Dynamic dispatching *)
 
   | t ->
@@ -297,7 +351,7 @@ let compile_strings output =
 
 let compile_remaining_functions output functions =
   while not @@ Queue.is_empty functions do
-    let (name, func) = Queue.pop functions in
+    let (name, func, env) = Queue.pop functions in
     let rec aux i llvm_args env args =
       match args with
       | (arg, typ) :: args ->
@@ -309,7 +363,10 @@ let compile_remaining_functions output functions =
           args
       | [] -> List.rev llvm_args, env
     in
-    let args, env = aux 0 [] Env.empty func.parameters in
+    let args, env =
+      let env = Env.add name (Label (type_to_llvm func.typ, name) : Llvm.value) env in
+      aux 0 [] env func.parameters
+    in
     let return_type =
       match func.typ with
       | Arrow (_, return_type) -> return_type

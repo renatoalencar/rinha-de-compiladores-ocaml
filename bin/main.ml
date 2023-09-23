@@ -36,6 +36,7 @@ let main () =
   in
 
   let typedtree = Typedtree.of_parsed_tree parsetree in
+  (* Format.printf "%a\n" Typedtree.pp_typed_tree typedtree; *)
 
   (* TODO: Use the file base name *)
   let output_filename = Filename.temp_file "rinha" ".ll" in

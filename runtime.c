@@ -60,6 +60,11 @@ struct rinha_tuple_t {
   void *second;
 };
 
+struct rinha_closure_t {
+  void* function;
+  void* arguments[];
+};
+
 // TODO: Replace malloc/free with increment/compact (linear allocator + mark and compact gc)
 
 void rinha_init_memory() {
@@ -208,8 +213,16 @@ void rinha_gc_mark() {
         }
         break;
 
-      case CLOSURE:
-        // TODO
+      case CLOSURE: {
+          struct rinha_closure_t *closure = (void*) &object[1];
+          // TODO: Should function pointer be scanned?
+          // I can only observe static pointers being there.
+          for (int i = 0; i < object->words - 1; i++) {
+            if (!rinha_is_integer((int64_t) closure->arguments[i])) {
+              queue_add(&work_queue, OBJECT_ADDR(closure->arguments[i]));
+            }
+          }
+        }
         break;
 
       case STRING:

@@ -1,9 +1,21 @@
+// The purpose is to test allocations
+// Every tuple foo makes an allocation
+// and every int to string convertion and
+// concatenation makes another two.
+// They should be constantly collected
+// minizing performance impact.
 let sum = fn (n, s) => {
     let foo = (n - 1, s + 1);
+
+    let bar = fn () => {
+        print("S " + second(foo))
+    };
+
     if (n == 0) {
         second(foo)
     } else {
         let _ = print("N " + n);
+        let _ = bar();
         sum(first(foo), second(foo))
     }
 };
@@ -13,5 +25,5 @@ let sum2 = fn (n, s) => {
     else { sum2(n - 1, s + 1) }
 };
 
-let n = 5000;
+let n = 100000000;
 print(sum(n, 0))

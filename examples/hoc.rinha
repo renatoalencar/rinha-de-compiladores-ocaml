@@ -1,0 +1,8 @@
+
+let n = 1;
+
+let apply = fn(f, x) => {
+  f(x + n)
+};
+
+print(apply(fn (a) => { a + 1 }, 10))
