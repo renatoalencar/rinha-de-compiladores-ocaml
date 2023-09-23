@@ -136,6 +136,10 @@ let find_free_variables env parameters body =
   match expr with
   | T_Int _ | T_Str _ | T_Bool _ -> vars
 
+  | T_Function _ ->
+    (* "Warning: TODO find free variables in nested anonymous closures.?"; *)
+    vars
+
   | T_Let (name, value, next, _, _) ->
     let vars = aux vars defined value in
     aux vars (StringSet.add name defined) next
@@ -157,10 +161,6 @@ let find_free_variables env parameters body =
     StringSet.union
       (aux vars defined lhs)
       (aux vars defined rhs)
-
-  | T_Function _ ->
-    prerr_endline "Warning: TODO find free variables in nested closures.";
-    vars
 
   | T_If { predicate; consequent; alternative; _ } ->
     StringSet.(union
@@ -186,47 +186,50 @@ let create_name base =
     incr name_counter;
     base ^ string_of_int !name_counter
 
+let push_function_for_compilation func env name fn =
+  (* TODO: Pass actual refence to function.
+      Either a closure or a global function. *)
+  let free_variables =
+  (* Placeholder for recursive functions *)
+    let env = Env.add name (Int32 0l) (keep_only_global_values env) in
+    List.of_seq @@ StringSet.to_seq @@ find_free_variables env fn.parameters fn.body in
+  let rec aux vars =
+    match vars with
+    | [] -> fn.parameters
+    | var :: next -> (var, find_variable var fn.env) :: aux next
+  in
+  let closure =
+    match free_variables with
+    | [] -> (Label (type_to_llvm fn.typ, name) : Llvm.value)
+    | _ ->
+      let length = List.length free_variables + 1 in
+      let closure = compile_alloc func (Int32.of_int length) 3l in
+      compile_array_store func Str closure (Int32 0l) (Label (type_to_llvm fn.typ, name) : Llvm.value);
+      List.iteri (fun idx name ->
+        compile_array_store func Str closure (Int32 Int32.(of_int (idx + 1))) (find_variable name env))
+        free_variables;
+      Closure (List.map (fun name -> type_to_llvm @@ Env.find name fn.env, name) free_variables, closure)
+  in
+  let env = Env.add name closure env in
+  let fn =
+    { fn with
+      parameters = aux free_variables }
+  in
+  Queue.push
+    (name, fn, keep_only_global_values env)
+    remaining_functions;
+  env  
+
 let rec compile global func env tree =
   match tree with
   | T_Function fn ->
     let name = create_name "rinha_anon_closure" in
-    let env = keep_only_global_values env in
-    Queue.push (name, fn, env) remaining_functions;
+    let _ = push_function_for_compilation func env name fn in
     let label: Llvm.value = Label (type_to_llvm (find_type tree), name) in
     label
 
   | T_Let (name, T_Function fn, next, _typ, _) ->
-    (* TODO: Pass actual refence to function.
-       Either a closure or a global function. *)
-    let free_variables =
-      (* Placeholder for recursive functions *)
-      let env = Env.add name (Int32 0l) (keep_only_global_values env) in
-      List.of_seq @@ StringSet.to_seq @@ find_free_variables env fn.parameters fn.body in
-    let rec aux vars =
-      match vars with
-      | [] -> fn.parameters
-      | var :: next -> (var, find_variable var fn.env) :: aux next
-    in
-    let closure =
-      match free_variables with
-      | [] -> (Label (type_to_llvm fn.typ, name) : Llvm.value)
-      | _ ->
-        let length = List.length free_variables + 1 in
-        let closure = compile_alloc func (Int32.of_int length) 3l in
-        compile_array_store func Str closure (Int32 0l) (Label (type_to_llvm fn.typ, name) : Llvm.value);
-        List.iteri (fun idx name ->
-          compile_array_store func Str closure (Int32 Int32.(of_int (idx + 1))) (find_variable name env))
-          free_variables;
-        Closure (List.map (fun name -> type_to_llvm @@ Env.find name fn.env, name) free_variables, closure)
-    in
-    let env = Env.add name closure env in
-    let fn =
-      { fn with
-        parameters = aux free_variables }
-    in
-    Queue.push
-      (name, fn, keep_only_global_values env)
-      remaining_functions;
+    let env = push_function_for_compilation func env name fn in
     compile global func env next
 
   | T_Print (expr, _) ->

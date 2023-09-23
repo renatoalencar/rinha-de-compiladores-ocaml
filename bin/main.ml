@@ -7,7 +7,7 @@ let compile_module modname =
     String.concat " "
     [ llc; "-o"; output_filename; "--filetype=obj"; modname ]
   in
-  prerr_endline command;
+  (* prerr_endline command; *)
   ignore @@ Sys.command command;
   output_filename
 
@@ -18,7 +18,7 @@ let link_program modules outfile =
     String.concat " "
         ([ ld; ld_flags; "-o"; outfile; "-static" ] @ modules)
   in
-  prerr_endline command;
+  (* prerr_endline command; *)
   ignore @@ Sys.command command
       
 let main () =
@@ -45,6 +45,6 @@ let main () =
   close_out output;
 
   let objfile = compile_module output_filename in
-  link_program [objfile; "runtime.o" ] Sys.argv.(2)
+  link_program [objfile; "-lrinha" ] Sys.argv.(2)
 
 let () = main ()
