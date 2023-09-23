@@ -1,5 +1,12 @@
 # Rinha(ML?) em OCaml
 
+## Build and Run
+
+```
+docker buid -t rinhaml .
+docker run -it --rm -v $(pwd)/examples:/var/rinha rinhaml hello.json
+```
+
 ## Ideias
 
 - Reproduzir a sintaxe de definida em https://github.com/aripiprazole/rinha-de-compiler/blob/main/SPECS.md
