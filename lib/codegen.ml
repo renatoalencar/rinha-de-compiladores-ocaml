@@ -26,8 +26,8 @@ let compile_binary func op typ lhs lhs_type rhs _rhs_type =
   let result_type = type_to_llvm typ in
   let instr =
     match op with
-    | Lt -> I_icmp (Sle, type_to_llvm lhs_type, lhs, rhs)
-    | Lte -> I_icmp (Slt, type_to_llvm lhs_type, lhs, rhs)
+    | Lt -> I_icmp (Slt, type_to_llvm lhs_type, lhs, rhs)
+    | Lte -> I_icmp (Sle, type_to_llvm lhs_type, lhs, rhs)
     | Eq -> I_icmp (Eq, type_to_llvm lhs_type, lhs, rhs)
     | Neq -> I_icmp (Ne, type_to_llvm lhs_type, lhs, rhs)
     | Gt -> I_icmp (Sgt, type_to_llvm lhs_type, lhs, rhs)
