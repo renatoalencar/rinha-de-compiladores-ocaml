@@ -1,3 +1,3 @@
 #!/bin/sh
 
-rinha $1 a.out && ./a.out
+rinha /var/rinha/source.rinha.json a.out && ./a.out
