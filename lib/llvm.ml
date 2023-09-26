@@ -220,7 +220,8 @@ let write_to_file output { name; return_type; body; arguments; allocations; _ } 
       |> List.mapi (fun i typ -> Format.sprintf "%s %%%d" (type_to_string typ) i)
       |> String.concat ", ");
 
-  write_toplevel fmt (Call (Void, "rinha_require_allocations", [ Int32 allocations  ]));
+  if allocations > 0l then
+    write_toplevel fmt (Call (Void, "rinha_require_allocations", [ Int32 allocations  ]));
 
   while not @@ Queue.is_empty body do
     let instr = Queue.pop body in
