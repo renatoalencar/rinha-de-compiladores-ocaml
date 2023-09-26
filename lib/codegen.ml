@@ -71,13 +71,17 @@ let compile_string_convertion func typ compiled' =
     push_instruction func
       (Assign (str, I_select (compiled', true', false')));
     Reg (Ptr, str)
-  | Dyn ->
+  | Dyn | Tuple _ | Var _ ->
     let str' = create_register func "v" in
     func.allocations <- Int32.add func.allocations 1l;
     push_instruction func
       (Assign (str', I_call (Ptr, Label (Ptr, "rinha_dyn_to_string"), [ compiled' ])));
     Reg (Ptr, str')
-  | _ -> assert false
+
+  | Arrow _ ->
+    compile_string func "<#closure>"
+
+
 
 let compile_string_concatenation func lhs lhs_type rhs rhs_type =
   let reg = create_register func "v" in
@@ -417,7 +421,8 @@ let compile_remaining_functions output functions =
     push_instruction llvm_function
       (Ret return_value);
     compile_strings output;
-    Llvm.write_to_file output llvm_function
+    Llvm.write_to_file output llvm_function;
+    flush output
   done
 
 (* External functions *)

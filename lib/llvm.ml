@@ -227,7 +227,8 @@ let write_to_file output { name; return_type; body; arguments; allocations; _ } 
     let instr = Queue.pop body in
     write_toplevel fmt instr
   done;
-  Format.fprintf fmt "}\n"
+  Format.fprintf fmt "}\n";
+  Format.pp_print_flush fmt ()
 
 let write_declare output name return_type arguments =
   let fmt = Format.formatter_of_out_channel output in
