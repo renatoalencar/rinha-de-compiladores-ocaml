@@ -13,9 +13,10 @@ let type_to_llvm typ =
   | Bool -> I1
   | Str -> Ptr
   | Tuple _ -> Array (2, Ptr)
-  (* | Arrow (args, ret) -> Fn (type_to_llvm ret, List.map type_to_llvm args) *)
   | Arrow _ -> Ptr
   | Var _ -> Ptr
+  | Dyn -> Ptr
+  (* | Arrow (args, ret) -> Fn (type_to_llvm ret, List.map type_to_llvm args) *)
   (* | t ->
     Format.printf "Error: %a\n" Typedtree.pp_typ t;
     assert false *)
@@ -70,6 +71,12 @@ let compile_string_convertion func typ compiled' =
     push_instruction func
       (Assign (str, I_select (compiled', true', false')));
     Reg (Ptr, str)
+  | Dyn ->
+    let str' = create_register func "v" in
+    func.allocations <- Int32.add func.allocations 1l;
+    push_instruction func
+      (Assign (str', I_call (Ptr, Label (Ptr, "rinha_dyn_to_string"), [ compiled' ])));
+    Reg (Ptr, str')
   | _ -> assert false
 
 let compile_string_concatenation func lhs lhs_type rhs rhs_type =
@@ -126,6 +133,11 @@ let compile_array_store func typ arr pos value =
     [ Assign (el_ptr, I_getelementptr (type_to_llvm typ, arr, pos))
     ; Store (value, Reg (Ptr, el_ptr), Int32 8l) ]
 
+let unbox_integer_if_dyn func typ expected_type compiled =
+  match typ with
+  | Dyn -> compile_array_load func expected_type compiled (Int32 0l)
+  | _ -> compiled
+
 module StringSet = Set.Make(String)
 
 (* TODO: Still not working!
@@ -172,6 +184,7 @@ let find_free_variables env parameters body =
 
   | T_Print (value, _)
   | T_First (value, _, _)
+  | T_Dyn value
   | T_Second (value, _, _) -> aux vars defined value
   in
   let parameters = List.fold_left
@@ -239,7 +252,7 @@ let rec compile global func env tree =
       (Call (Void, "rinha_print", [ str' ]));
     expr'
 
-  | T_Call { callee = T_Var (name, _, _); arguments; typ; _ } ->
+  | T_Call { callee; arguments; typ; _ } ->
     let args =
       arguments
       |> List.map
@@ -248,7 +261,7 @@ let rec compile global func env tree =
     in
     let retval = create_register func "v" in
     let return_type = type_to_llvm typ in
-    let fn = find_variable name env in
+    let fn = compile false func env callee in
     let fn, free_variables =
       match fn with
       | Closure (free_variables, ptr) ->
@@ -284,6 +297,17 @@ let rec compile global func env tree =
   | T_Binary { lhs; op; rhs; typ; _ } ->
     let l' = compile global func env lhs in
     let r' = compile global func env rhs in
+
+    let expected_type =
+      match op with
+      | Add | Sub | Mul | Div | Rem -> I32
+      | And | Or -> I1
+      | _ -> type_to_llvm typ (* Ignore comparisons for now *)
+    in
+
+    let l' = unbox_integer_if_dyn func (find_type lhs) expected_type l' in
+    let r' = unbox_integer_if_dyn func (find_type rhs) expected_type r' in
+
     compile_binary func op typ
       l' (find_type lhs)
       r' (find_type rhs)
@@ -341,9 +365,22 @@ let rec compile global func env tree =
   (* TODO:
     - Dynamic dispatching *)
 
-  | t ->
+  | T_Dyn expr ->
+    let value' = compile global func env expr in
+    let typ = find_type expr in
+    let boxed =
+      match typ with
+      | Int | Bool ->
+        let ptr = compile_alloc func 1l 0l in
+        compile_array_store func typ ptr value' (Int32 0l);
+        ptr
+      | _ -> value'
+    in
+    boxed
+
+  (* | t ->
     Format.eprintf "ERROR: %a\n" pp_typed_tree t;
-    exit 1
+    exit 1 *)
 
 let compile_strings output =
   while not @@ Queue.is_empty remaining_strings do
@@ -388,10 +425,11 @@ let header: (string * typ * typ list) list =
   [ "rinha_print"         , Void, [ Ptr ]
   ; "rinha_strcat"        , Void, [ Ptr; Ptr ]
   ; "rinha_int_to_string" , Ptr , [ Ptr; Ptr ]
+  ; "rinha_dyn_to_string" , Ptr , [ Ptr ]
   ; "rinha_alloc"         , Ptr , [ I32; I32 ]
   ; "rinha_init_memory"   , Void, []
   ; "rinha_gc_add_root"   , Void, [ Ptr ]
-  ; "rinha_require_allocations", Void, [ I32 ]]
+  ; "rinha_require_allocations", Void, [ I32 ] ]
 
 let compile_main output tree =
   List.iter

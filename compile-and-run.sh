@@ -2,6 +2,7 @@
 
 export PATH=$HOME/.cargo/bin/:$PATH
 export LLC='llc-16'
+export LLC_FLAGS=-O3
 export LD=musl-gcc
 export LD_FLAGS=-L.
 export RINHACC=./_build/install/default/bin/rinha

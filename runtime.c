@@ -7,6 +7,7 @@
 #define RINHA_GC_MAXIMUM_ALLOCATIONS_BEFORE_GC 100000
 
 enum rinha_gc_tag_t {
+  INTEGER = 0,
   STRING = 1,
   TUPLE = 2,
   CLOSURE = 3
@@ -63,6 +64,11 @@ struct rinha_tuple_t {
 struct rinha_closure_t {
   void* function;
   void* arguments[];
+};
+
+static struct rinha_string_t CLOSURE_STR = {
+  .length = 10,
+  .contents = "<#closure>",
 };
 
 // TODO: Replace malloc/free with increment/compact (linear allocator + mark and compact gc)
@@ -348,6 +354,56 @@ struct rinha_string_t* rinha_int_to_string(int value) {
   /* Move string to previously allocated position, this should keep it aligned. */
   rinha_memcpy(str->contents, p, str->length);
   return str;
+}
+
+int32_t rinha_unbox_integer(void* ptr) {
+  if (rinha_is_integer((int64_t) ptr)) {
+    return (int32_t) ptr;
+  }
+
+  return (int32_t) *((int64_t *) ptr);
+}
+
+struct rinha_string_t* rinha_dyn_to_string(void* ptr) {
+  struct rinha_object_t* object = ptr - sizeof(struct rinha_object_t);
+
+  if (rinha_is_integer((int64_t) ptr)) {
+    return rinha_int_to_string((int32_t) ptr);
+  }
+
+  switch (object->tag) {
+    case INTEGER:
+      return rinha_int_to_string((int32_t) *((int64_t *) ptr));
+    case STRING:
+      return ptr;
+    case TUPLE: {
+      char* str;
+      struct rinha_tuple_t* tuple = ptr;
+      struct rinha_string_t* first = rinha_dyn_to_string(tuple->first);
+      struct rinha_string_t* second = rinha_dyn_to_string(tuple->second);
+
+      size_t string_length = first->length + second->length + 4 + sizeof(size_t);
+      struct rinha_string_t* result = rinha_alloc(
+        string_length / 8 + 1,
+        STRING
+      );
+      result->length = string_length;
+      str = result->contents;
+      str[0] = '(';
+      str[first->length + 1] = ',';
+      str[first->length + 2] = ' ';
+      str[string_length - 1] = ')';
+      rinha_memcpy(&str[1], first->contents, first->length);
+      rinha_memcpy(&str[first->length + 3], second->contents, second->length);
+
+      return result;
+    }
+    case CLOSURE: {
+      struct rinha_string_t* closure_str = rinha_alloc(sizeof(CLOSURE_STR) / 8 + 1, STRING);
+      rinha_memcpy(closure_str, &CLOSURE_STR, sizeof(CLOSURE_STR));
+      return closure_str;
+    }
+  }
 }
 
 struct rinha_string_t* rinha_strcat(

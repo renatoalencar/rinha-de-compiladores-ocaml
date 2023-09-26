@@ -1,16 +1,19 @@
 
 open Parsetree
 
+exception Unify_error
+
+
 module Env = struct
   include Map.Make(String)
   let pp _ _ _ = ()
 end
 
-
 type typ =
   | Int
   | Str
   | Bool
+  | Dyn
   | Var of int ref
   | Tuple of typ * typ
   | Arrow of typ list * typ
@@ -20,6 +23,7 @@ let rec type_to_string t =
   | Int -> "Int"
   | Str -> "Str"
   | Bool -> "Bool"
+  | Dyn -> "Dyn"
   | Var v -> "'v" ^ string_of_int !v
   | Tuple (fst, snd) -> "(" ^ type_to_string fst ^ ", " ^ type_to_string snd ^ ")"
   | Arrow (args, ret) ->
@@ -30,6 +34,7 @@ let pp_typ fmt t = Format.pp_print_string fmt (type_to_string t)
 type typed_tree =
   | T_Int of Int64.t * loc
   | T_Str of string * loc
+  | T_Dyn of typed_tree
   | T_Call of call
   | T_Binary of binary
   | T_Function of func
@@ -70,12 +75,16 @@ and func =
   ; loc : loc }
 [@@deriving show]
 
+
 let type_env = Hashtbl.create 1024
-let counter = ref 0
-let create_var () =
-  let c = !counter in
-  incr counter;
-  Var (ref c)
+
+module Var = struct
+  let counter = ref 0
+  let create () =
+    let c = !counter in
+    incr counter;
+    Var (ref c)
+end
 
 let report_error ~loc message =
   Printf.eprintf "%d:%d - %s"
@@ -89,6 +98,7 @@ let rec find_type tree =
   | T_Int _ -> Int
   | T_Bool _ -> Bool
   | T_Str _ -> Str
+  | T_Dyn _ -> Dyn
   | T_Call { typ; _ } -> typ
   | T_Binary { typ; _ } -> typ
   | T_Function { typ; _ } -> typ
@@ -103,7 +113,7 @@ let rec find_type tree =
 let rec build_parameters types env params =
   match params with
   | (name, _loc) :: params ->
-    let typ = create_var () in
+    let typ = Var.create () in
     build_parameters
       ((name, typ) :: types)
       (Env.add name typ env)
@@ -125,23 +135,24 @@ let rec of_parsed_tree ~env tree =
         unify callee_type (Arrow (List.map find_type arguments, typ));
         typ
       | t ->
-        let typ = create_var () in
+        let typ = Var.create () in
         unify t (Arrow (List.map find_type arguments, typ));
-	typ
-        (*Format.printf "%a has type %a\n" pp_typed_tree callee pp_typ t;
-	report_error ~loc "Callee is not a function."*)
-      
+	  typ
+  
     in
     T_Call { callee; arguments; loc; typ = return_type  }
 
   | E_Binary { lhs; op = Add; rhs; loc } ->
     let lhs = of_parsed_tree ~env lhs in
     let rhs = of_parsed_tree ~env rhs in
-    let typ =
+    let lhs, rhs, typ =
       (* TODO: Probably too naive? *)
       match find_type lhs, find_type rhs with
-      | _, Str | Str, _ -> Str
-      | _ -> Int
+      | _, Str | Str, _ -> lhs, rhs, Str
+      | Dyn, Dyn -> lhs, rhs, Dyn
+      | _, Dyn -> T_Dyn lhs, rhs, Dyn
+      | Dyn, _ -> lhs, T_Dyn rhs, Dyn
+      | _ -> lhs, rhs, Int
     in
     T_Binary { lhs; op = Add; rhs; loc; typ }
 
@@ -154,7 +165,7 @@ let rec of_parsed_tree ~env tree =
 
   | E_Let (name, E_Function { parameters; body; loc = fn_loc }, next, loc) ->
     let types, body_env = build_parameters [] env parameters in
-    let return_type = create_var () in
+    let return_type = Var.create () in
     let fn_type = Arrow (List.map (fun (_, typ) -> typ) types, return_type) in
     let body_env =
       Env.add
@@ -187,6 +198,7 @@ let rec of_parsed_tree ~env tree =
       ; typ = Arrow (List.map (fun (_, typ) -> typ) types, find_type body) }
 
   | E_Let (name, value, next, loc) ->
+    (* Yeah, naive let inference. *)
     let value = of_parsed_tree ~env value in
     let env = Env.add name (find_type value) env in
     let next = of_parsed_tree ~env next in
@@ -200,12 +212,19 @@ let rec of_parsed_tree ~env tree =
     let expected_type = find_type consequent in
     (* TODO: If there's a type mistach replace both arms with
        a dynamic dispatchable value. *)
-    unify expected_type (find_type alternative);
-    T_If { predicate
-         ; consequent
-         ; alternative
-         ; typ = expected_type
-         ; loc }
+    (try 
+      unify expected_type (find_type alternative);
+      T_If { predicate
+           ; consequent
+           ; alternative
+           ; typ = expected_type
+           ; loc }
+    with Unify_error ->
+      T_If { predicate
+           ; consequent = T_Dyn consequent
+           ; alternative = T_Dyn alternative
+           ; typ = Dyn
+           ; loc })
 
   | E_Print (arg, loc) ->
     T_Print (of_parsed_tree ~env arg, loc)
@@ -214,6 +233,7 @@ let rec of_parsed_tree ~env tree =
     let tuple = of_parsed_tree ~env tuple in
     let typ = match (find_type tuple) with
       | Tuple (fst, _) -> fst
+      | Var _ -> Dyn
       | t -> report_error ~loc ("Expected a tuple, found a " ^ type_to_string t)
     in
     T_First (tuple, typ, loc)
@@ -222,6 +242,7 @@ let rec of_parsed_tree ~env tree =
     let tuple = of_parsed_tree ~env tuple in
     let typ = match find_type tuple with
       | Tuple (_, snd) -> snd
+      | Var _ -> Dyn
       | t -> report_error ~loc ("Expected a tuple, found a " ^ type_to_string t)
     in
     T_Second (tuple, typ, loc)
@@ -268,11 +289,13 @@ and unify t1 t2 =
       exit 1);
     unify r1 r2
 
+  | Dyn, _ | _, Dyn -> ()
+
   | t1, t2 ->
     Printf.eprintf "Type %s cant match %s"
       (type_to_string t1)
       (type_to_string t2);
-    assert false
+    raise Unify_error
 
 and type_binary op lhs rhs =
     unify (find_type lhs) (find_type rhs);
@@ -290,6 +313,7 @@ let resolve_type_variables typed_tree =
   let rec resolve typed_tree =
     match typed_tree with
     | T_Int _ | T_Str _ | T_Bool _ -> typed_tree
+    | T_Dyn tree -> T_Dyn (resolve tree)
     | T_Call { callee; arguments; typ; loc } ->
       T_Call
         { callee = resolve callee
