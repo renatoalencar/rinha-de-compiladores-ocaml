@@ -364,6 +364,14 @@ int32_t rinha_unbox_integer(void* ptr) {
   return (int32_t) *((int64_t *) ptr);
 }
 
+/*
+ * TODO: Use separate field on rinha_object_t to tell which
+ * string conversion implementation to use instead, then this
+ * should look up for it and call with the object pointer.
+ * Probably could use it for other stuff as well, if it needs
+ * more fields it should probably be rethinked in order to
+ * not affect locality.
+ */
 struct rinha_string_t* rinha_dyn_to_string(void* ptr) {
   struct rinha_object_t* object = ptr - sizeof(struct rinha_object_t);
 
