@@ -262,7 +262,7 @@ void rinha_gc_sweep() {
       free(object);
       freed_objects++;
     } else {
-      rinha_allocated_objects++;
+      //rinha_allocated_objects++;
       previous = &object->next;
     }
 
